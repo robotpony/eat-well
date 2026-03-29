@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.10 — 2026-03-28
+
+- Implemented P4: markdown output (P4 complete)
+- New `ew/markdown.py`: `render_label_md()` and `render_recipe_md()` — GFM table renderers mirroring the rich console layout
+- `ew lookup --format md` outputs a two-column nutrition label as a markdown table
+- `ew recipe eval --format md` outputs the ingredient match table and nutrient totals table as markdown
+- Both commands default to `--format console` (no behaviour change without the flag)
+- 17 new tests in `tests/test_markdown.py` (105 total)
+- Removed completed phases P0–P3 from PLAN.md (history is in CHANGELOG)
+
 ## 0.1.9 — 2026-03-28
 
 - Fixed three parser bugs that caused most `beef-base.md` ingredients to return zero FTS results

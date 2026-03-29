@@ -110,7 +110,8 @@ def import_cmd(db, import_dir):
 @click.option("--pick", "pick_n", default=None, type=int, metavar="N", help="Auto-select match N without prompting")
 @click.option("--per", "per_grams", default=None, type=float, metavar="GRAMS", help="Second column: per N grams (default: first portion)")
 @click.option("--lang", default="en", type=click.Choice(["en", "fr"]), show_default=True, help="Search and display language")
-def lookup(query, db, pick_n, per_grams, lang):
+@click.option("--format", "fmt", default="console", type=click.Choice(["console", "md"]), show_default=True, help="Output format")
+def lookup(query, db, pick_n, per_grams, lang, fmt):
     """Look up nutrition information for a food.
 
     QUERY is a plain-text search string, e.g. \"raw almonds\" or \"whole milk\".
@@ -162,7 +163,12 @@ def lookup(query, db, pick_n, per_grams, lang):
 
     nutrients = get_nutrients(conn, food_id)
     portions = get_portions(conn, food_id)
-    render_label(_console, food, nutrients, portions, per_grams, lang)
+
+    if fmt == "md":
+        from .markdown import render_label_md
+        click.echo(render_label_md(food, nutrients, portions, per_grams, lang))
+    else:
+        render_label(_console, food, nutrients, portions, per_grams, lang)
 
 
 @cli.command()
@@ -226,7 +232,8 @@ def recipe():
 @click.option("--db", default=None, metavar="PATH", help="Database path (default: ./work/ew.db)")
 @click.option("--servings", default=None, type=click.IntRange(min=1), metavar="N", help="Show a per-serving column")
 @click.option("--lang", default="en", type=click.Choice(["en", "fr"]), show_default=True, help="Search and display language")
-def recipe_eval(file, db, servings, lang):
+@click.option("--format", "fmt", default="console", type=click.Choice(["console", "md"]), show_default=True, help="Output format")
+def recipe_eval(file, db, servings, lang, fmt):
     """Evaluate the nutrition of a recipe from an ingredient list.
 
     FILE is a text file with one ingredient per line (amount unit food).
@@ -287,6 +294,14 @@ def recipe_eval(file, db, servings, lang):
 
     if not results:
         _console.print("[dim]No ingredient lines found.[/dim]")
+        return
+
+    # --- Markdown output ---
+    if fmt == "md":
+        from .markdown import render_recipe_md
+        matched_md = [r for r in results if isinstance(r, MatchResult)]
+        totals_md = aggregate([r.nutrients for r in matched_md])
+        click.echo(render_recipe_md(results, totals_md, servings))
         return
 
     # --- Ingredient table ---

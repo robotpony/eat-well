@@ -1,154 +1,157 @@
 # Implementation Plan
 
-## ~~P0: Schema and data import~~ ✓
-
-Goal: a populated `ew.db` with all three US datasets and CNF.
-
-### 0.1 Project structure
-
-```
-eat-well/
-    ew/
-        __init__.py
-        db.py           -- connection, schema creation, migrations
-        importers/
-            __init__.py
-            base.py
-            cnf.py
-            usda_foundation.py
-            usda_sr_legacy.py
-            usda_survey.py
-    tests/
-        test_import.py
-    pyproject.toml
-    ew.db               -- generated, gitignored
-```
-
-### 0.2 Schema setup
-
-- `db.py` creates all tables and FTS index on first run
-- Schema versioned via a `schema_version` table; migrations run automatically
-- `ew import` drops and recreates all data tables (idempotent re-import)
-
-### 0.3 Importers (in order)
-
-Each importer logs row counts and errors. Any row that fails validation is skipped with a warning, not a crash.
-
-1. **CNF** (`import/cad/cnf-fcen-csv/`)
-   - Sources: FOOD NAME, FOOD GROUP, NUTRIENT NAME, NUTRIENT AMOUNT, CONVERSION FACTOR, MEASURE NAME
-   - Skips: update/change files (delta format; treat baseline as authoritative for now)
-   - French names: stored in `name_fr` columns on `nutrient`, `food`, `food_category`, `food_portion`
-
-2. **USDA Foundation** (`import/usa/FoodData_Central_foundation_food_csv_2023-04-20/`)
-   - Sources: `food.csv`, `nutrient.csv`, `food_nutrient.csv`, `food_portion.csv`, `food_category` (inferred from food)
-   - Skips: `acquisition_samples`, `agricultural_samples`, `sub_sample_result`, lab methods (analytical metadata, not needed for lookups)
-
-3. **USDA SR Legacy** (unzip `FoodData_Central_sr_legacy_food_csv_2018-04.zip` first)
-   - Same CSV structure as foundation
-   - ~8,800 foods; good broad coverage for common ingredients
-
-4. **USDA Survey / FNDDS** (unzip `FoodData_Central_survey_food_csv_2022-10-28.zip`)
-   - Includes combination dishes useful for recipe evaluation later
-   - Same import path as foundation/SR
-
-### 0.4 FTS rebuild
-
-After all importers complete, drop and rebuild `food_fts`. This is separate from per-importer inserts so FTS stays consistent.
-
-### 0.5 Validation ✓
-
-26 unit tests cover: schema creation, CNF import, USDA import, nutrient
-deduplication, gram-weight calculation, FTS rebuild, missing-file handling.
-
-Run: `pytest tests/`
-
----
-
-## ~~P1: CLI lookup tool~~ ✓
-
-Goal: `ew lookup "raw almonds"` returns a readable nutrition label.
-
-### 1.1 FTS search
-
-- Match against `food_fts` using FTS5 BM25 ranking
-- Return top 5 matches with source label
-- If multiple results, prompt user to pick one (or accept `--pick N` flag)
-
-### 1.2 Nutrition label formatter
-
-Display order follows `nutrient.rank`. Group into sections:
-
-1. Energy (kcal, kJ)
-2. Macros (fat, carbs, fibre, sugars, protein)
-3. Minerals (sodium, potassium, calcium, iron, etc.)
-4. Vitamins (A, B-group, C, D, E, K)
-
-Use `rich` tables. Support `--per <amount>g` to scale values (default: per 100g and per first listed portion).
-
-### 1.3 Language support
-
-`--lang fr` switches search and output to French. Only affects CNF foods (USDA has no French data).
-
-### 1.4 `ew sources` command
-
-Lists loaded sources, version, and row counts. Quick sanity check.
-
----
-
-## ~~P2: Query tools~~ ✓
-
-Goal: evaluate recipes and compare ingredients.
-
-### 2.1 Ingredient matching
-
-`ew match "1 cup whole milk"` — parse a quantity + ingredient string, find best food match, return scaled nutrients.
-
-Parsing strategy: extract amount + unit first (regex), then fuzzy-search the remainder.
-
-### 2.2 Recipe evaluation
-
-Accept a simple ingredient list (one per line, `amount unit ingredient`):
-
-```
-ew recipe eval ingredients.txt
-```
-
-Output: aggregate nutrition totals + per-portion breakdown (if `--servings N` given).
-
-### 2.3 Portion math
-
-- Convert any listed measure to grams using `food_portion`
-- Fall back to gram_weight of 1g if no matching portion found (with a warning)
-
----
-
-## P4: Markdown generation
+## ~~P4: Markdown generation~~ ✓
 
 Goal: produce formatted output suitable for notes, docs, or a future web view.
 
-### 4.1 `ew lookup --format md`
+### 4.1 `ew lookup --format md` ✓
 
-Nutrition label as a markdown table. Useful for Obsidian, GitHub, or recipe docs.
+Nutrition label as a GFM table with section headers and two-column layout.
 
-### 4.2 `ew recipe eval --format md`
+### 4.2 `ew recipe eval --format md` ✓
 
-Full recipe nutrition breakdown as markdown.
-
+Full recipe breakdown: ingredient match table + nutrient totals table, with
+optional per-serving column.
 
 ---
 
-## Next features
+## P5: HTML output
 
-1. HTML output, matching the lovely output of the console, including the recipe summary
-2. HTML form input
-3. Service API (for running as a local service, for other application access)
-4. LLM matching, for better parsing of recipes
+Goal: export nutrition labels and recipe summaries as styled HTML files.
+
+### 5.1 `--format html` flag
+
+Add `--format html` to `ew lookup` and `ew recipe eval`. When set, output is an
+HTML document instead of rich console output.
+
+### 5.2 HTML renderer
+
+New `ew/html.py` module with:
+- `render_label_html(nutrients, food_name, per_g, portion)` — nutrition label table
+- `render_recipe_html(results, title, servings)` — full recipe breakdown
+- Inline CSS only; no external dependencies or frameworks
+- Visual parity with the rich console layout (sections, two-column label)
+
+### 5.3 `--output FILE` flag
+
+Write HTML to a file instead of stdout. Default behaviour (no flag) prints to
+stdout so it can be piped.
+
+### 5.4 Validation
+
+Unit tests in `tests/test_html.py` covering:
+- Label and recipe renderers produce valid HTML fragments
+- Section grouping matches `lookup.SECTIONS` order
+- `--output` writes the file and the file is non-empty
+
+---
+
+## P6: Web UI
+
+Goal: browser-based form for interactive lookups and recipe evaluation, served
+directly by the `ew` tool.
+
+### 6.1 `ew serve` command
+
+Launches a local HTTP server (default `localhost:8080`). Flags: `--host`, `--port`.
+
+### 6.2 Lookup form
+
+Single-page form: text input → `GET /lookup?q=…` → returns the P5 HTML label
+fragment embedded in the page.
+
+### 6.3 Recipe form
+
+Multi-line textarea + servings field → `POST /recipe/eval` → returns the P5
+HTML recipe breakdown embedded in the page.
+
+### 6.4 Static template
+
+Single HTML template (`ew/templates/index.html`). Uses the P5 HTML output as
+the response body fragment; no JS framework required.
+
+---
+
+## P7: Service API
+
+Goal: run `ew` as a local HTTP service so other applications can query it
+programmatically via JSON.
+
+### 7.1 Flask application
+
+New `ew/server.py` using Flask. `ew serve` (from P6) launches this app.
+Flask added as an optional dependency (`ew[serve]`).
+
+### 7.2 JSON endpoints
+
+| Method | Path | Body / Params | Returns |
+|--------|------|---------------|---------|
+| `GET` | `/lookup` | `?q=raw+almonds&pick=1` | food + nutrient rows as JSON |
+| `POST` | `/match` | `{"ingredient": "1 cup milk"}` | scaled nutrients as JSON |
+| `POST` | `/recipe/eval` | `{"lines": [...], "servings": 4}` | aggregate totals as JSON |
+| `GET` | `/sources` | — | loaded sources list |
+
+### 7.3 Web UI integration
+
+`GET /` serves the P6 HTML form. `/lookup` and `/recipe/eval` support both
+`Accept: text/html` (returns rendered fragment) and `Accept: application/json`
+(returns JSON).
+
+### 7.4 Validation
+
+Tests in `tests/test_server.py` using Flask's test client. Cover happy paths
+and 400/404 error responses for each endpoint.
+
+---
+
+## P8: LLM ingredient matching
+
+Goal: fall back to an LLM when the regex parser cannot parse an ingredient
+string, improving real-world recipe coverage.
+
+### 8.1 Provider abstraction
+
+New `ew/llm.py` with an abstract `LLMProvider` interface:
+
+```python
+class LLMProvider(Protocol):
+    def extract_ingredient(self, text: str) -> dict | None:
+        """Return {"amount": float, "unit": str|None, "food": str} or None."""
+```
+
+### 8.2 Built-in providers
+
+- `AnthropicProvider` — uses `claude-haiku-4-5` for low latency and cost
+- `OllamaProvider` — calls a local Ollama instance; no API key required
+- Provider selected via `--llm-provider anthropic|ollama|none` flag (default: `none`)
+
+### 8.3 Structured output
+
+Prompt instructs the model to return a single JSON object with `amount`,
+`unit`, and `food` keys. Response validated before use; falls back to 1 g with
+a warning on parse failure.
+
+### 8.4 Response cache
+
+Parsed results cached in `work/llm_cache.sqlite` keyed on the normalised input
+string. Cache is hit before any API call. TTL: 7 days.
+
+### 8.5 Integration point
+
+`parse_ingredient()` returns `None` for strings it cannot handle. The CLI
+commands (`match`, `recipe eval`) check for `None` and, if a provider is
+configured, call `llm.extract_ingredient()` as a fallback.
+
+### 8.6 Validation
+
+Tests in `tests/test_llm.py` using a mock provider. Cover: cache hit/miss,
+malformed LLM response handling, fallback behaviour when provider is `none`.
 
 ---
 
 ## Deferred
 
-These are out of scope until P3 is complete:
+These are out of scope for the current roadmap:
 
 - Cross-source food deduplication (e.g., "almonds" in CNF vs. USDA foundation vs. SR legacy)
 - User recipe repository (Google Docs integration)
