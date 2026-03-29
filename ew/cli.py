@@ -320,11 +320,11 @@ def recipe_eval(file, db, servings, lang, fmt, output_file):
     _console.print()
     tbl = Table(box=None, show_header=False, padding=(0, 1), show_edge=False)
     tbl.add_column("icon",  no_wrap=True, width=2)
-    tbl.add_column("input", no_wrap=True)
+    tbl.add_column("input", no_wrap=True, max_width=38, overflow="ellipsis")
     tbl.add_column("arrow", no_wrap=True, style="dim")
-    tbl.add_column("match", style="bold")
-    tbl.add_column("grams", justify="right", style="green")
-    tbl.add_column("note",  style="yellow dim")
+    tbl.add_column("match", no_wrap=True, max_width=30, overflow="ellipsis", style="bold")
+    tbl.add_column("grams", justify="right", style="green", no_wrap=True)
+    tbl.add_column("note",  style="yellow dim", max_width=28, overflow="fold")
 
     for r in results:
         if isinstance(r, MatchResult):

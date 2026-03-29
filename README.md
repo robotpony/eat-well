@@ -104,4 +104,4 @@ Each line is parsed for a leading quantity and optional unit, then matched to th
 pytest tests/
 ```
 
-131 tests, all in-memory — no data files required. See `ARCHITECTURE.md` for schema details and `PLAN.md` for the roadmap.
+139 tests, all in-memory — no data files required. See `ARCHITECTURE.md` for schema details and `PLAN.md` for the roadmap.

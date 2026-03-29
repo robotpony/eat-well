@@ -131,7 +131,7 @@ def test_of_preposition_stripped():
     r = parse_ingredient("4 cups of sliced mushrooms")
     assert r is not None
     assert r.unit == "cups"
-    assert r.food_query == "sliced mushrooms"
+    assert r.food_query == "mushrooms"
 
 
 def test_dual_metric_imperial_amount():
@@ -151,6 +151,65 @@ def test_optional_ingredient_parenthetical():
     r = parse_ingredient("2 tsp Accent (optional)")
     assert r is not None
     assert r.food_query == "Accent"
+
+
+# ---------------------------------------------------------------------------
+# parse_ingredient — preparation adjective stripping
+# ---------------------------------------------------------------------------
+
+def test_single_prep_adjective_stripped():
+    r = parse_ingredient("4 cups sliced mushrooms")
+    assert r is not None
+    assert r.food_query == "mushrooms"
+
+
+def test_prep_adjective_after_of_stripped():
+    r = parse_ingredient("4 cups of sliced mushrooms")
+    assert r is not None
+    assert r.food_query == "mushrooms"
+
+
+def test_multiple_prep_adjectives_stripped():
+    # "chopped" is a prep adjective and stripped; "fresh" is not, so we stop there
+    r = parse_ingredient("200g chopped fresh parsley")
+    assert r is not None
+    assert r.food_query == "fresh parsley"
+
+
+def test_non_prep_word_not_stripped():
+    r = parse_ingredient("2 cups almond milk")
+    assert r is not None
+    assert r.food_query == "almond milk"
+
+
+def test_prep_adjective_not_stripped_when_alone():
+    # "sliced" is the only word left — not stripped (nothing remains after it)
+    r = parse_ingredient("1 cup sliced")
+    assert r is not None
+    assert r.food_query == "sliced"
+
+
+# ---------------------------------------------------------------------------
+# parse_ingredient — inline slash alternative (no spaces)
+# ---------------------------------------------------------------------------
+
+def test_inline_slash_alternative_stripped():
+    r = parse_ingredient("50g lemon/lime juice")
+    assert r is not None
+    assert r.food_query == "lemon"
+
+
+def test_inline_slash_alternative_with_more_words():
+    r = parse_ingredient("1 tbsp soy/tamari sauce")
+    assert r is not None
+    assert r.food_query == "soy"
+
+
+def test_spaced_slash_annotation_still_stripped():
+    # existing behaviour: " / note" with surrounding spaces
+    r = parse_ingredient("50g avocado / half an avocado")
+    assert r is not None
+    assert r.food_query == "avocado"
 
 
 # ---------------------------------------------------------------------------

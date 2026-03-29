@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.12 — 2026-03-29
+
+- Fixed recipe eval table layout: ingredient and match columns now have bounded widths with ellipsis overflow; notes no longer wrap across multiple rows
+- `parse_ingredient` now strips leading preparation adjectives (`sliced`, `diced`, `chopped`, `minced`, `grated`, `shredded`, `crushed`, `peeled`, `pitted`, `trimmed`, `halved`, `quartered`) from the food query so "sliced mushrooms" → FTS query "mushrooms"
+- `parse_ingredient` now strips inline slash alternatives without surrounding spaces (`lemon/lime juice` → "lemon"); previously only ` / annotation` with spaces was handled
+- Adjective stripping is intentionally conservative: "ground", "whole", "fresh", etc. are excluded to preserve canonical food names like "ground beef" and "whole milk"
+- 8 new tests in `tests/test_parser.py` (139 total)
+- Added quality improvement notes (items 1–6) to PLAN.md
+
 ## 0.1.11 — 2026-03-29
 
 - Implemented P5: HTML output (P5 complete)

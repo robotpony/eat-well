@@ -1,155 +1,89 @@
 # Implementation Plan
 
-## ~~P4: Markdown generation~~ ✓
+## Quality improvements (from recipe output review)
 
-Goal: produce formatted output suitable for notes, docs, or a future web view.
+Issues identified by running both example recipes and reviewing output.
 
-### 4.1 `ew lookup --format md` ✓
+### 1. Table column collapse *(done)*
 
-Nutrition label as a GFM table with section headers and two-column layout.
+The `input` column is `no_wrap=True`, which on long ingredient lines claims most
+of the terminal width and squeezes match names and notes to ~3 visible characters.
+Fix: allow the input column to wrap/truncate; constrain the note column to a
+fixed max width.
 
-### 4.2 `ew recipe eval --format md` ✓
+### 2. Preparation adjectives stripped from food query *(done)*
 
-Full recipe breakdown: ingredient match table + nutrient totals table, with
-optional per-serving column.
+`4 cups of sliced mushrooms` → food_query `sliced mushrooms` → FTS requires
+"sliced" AND "mushrooms" → no match. Common leading prep adjectives (`sliced`,
+`diced`, `chopped`, `minced`, `fresh`, `dried`, `cooked`, `raw`) should be
+stripped just as comma-descriptors after the noun already are.
 
----
+### 3. Inline slash alternative without spaces *(done)*
 
-## ~~P5: HTML output~~ ✓
+`50g lemon/lime juice` → food_query `lemon/lime juice`. `_NOTE_PATTERNS` only
+strips ` / annotation` (with surrounding spaces). After `_build_fts_query`
+removes the `/`, FTS searches `"lemon" AND "lime" AND "juice"` — no single food
+has all three → no match. Should strip `/alternative` (no surrounding spaces)
+leaving `lemon juice`.
 
-Goal: export nutrition labels and recipe summaries as styled HTML files.
+### 4. Wrong top FTS match for short queries
 
-### 5.1 `--format html` flag ✓
+`avocado` → "Oil, avocado"; `onion` → "Bread, onion". BM25 ranks long compound
+names above short exact matches. A post-FTS re-ranking step penalising food
+names much longer than the query would fix both cases.
 
-`ew lookup --format html` and `ew recipe eval --format html` emit a complete
-HTML document. Default remains `console` — no behaviour change without the flag.
+### 5. Piece-unit 1g fallback underestimates common ingredients
 
-### 5.2 HTML renderer ✓
+`1 shallot` and `4 cloves garlic` fall back to 1g/item because the DB has no
+portion data for them. A built-in weight table (shallot ≈ 30g, garlic clove ≈
+6g, egg ≈ 50g, etc.) as a second fallback before the 1g last resort would
+significantly improve totals accuracy.
 
-`ew/html.py`: `render_label_html()` and `render_recipe_html()`. Inline CSS
-only; system-font minimal style with section headers, indented nutrients, and
-status icons (✓ / ✗ / △) for recipe ingredients.
+### 6. Amount buried in parentheses
 
-### 5.3 `--output FILE` flag ✓
-
-Available on both `lookup` and `recipe eval` for any `--format`. Writes to a
-file; prints to stdout when omitted.
-
-### 5.4 Validation ✓
-
-26 tests in `tests/test_html.py`: complete document, escaping, icons, columns,
-section grouping, `--output` helper.
-
----
-
-## P6: Web UI
-
-Goal: browser-based form for interactive lookups and recipe evaluation, served
-directly by the `ew` tool.
-
-### 6.1 `ew serve` command
-
-Launches a local HTTP server (default `localhost:8080`). Flags: `--host`, `--port`.
-
-### 6.2 Lookup form
-
-Single-page form: text input → `GET /lookup?q=…` → returns the P5 HTML label
-fragment embedded in the page.
-
-### 6.3 Recipe form
-
-Multi-line textarea + servings field → `POST /recipe/eval` → returns the P5
-HTML recipe breakdown embedded in the page.
-
-### 6.4 Static template
-
-Single HTML template (`ew/templates/index.html`). Uses the P5 HTML output as
-the response body fragment; no JS framework required.
+`garlic powder (½ teaspoon)` → parser returns None (no leading number). Unusual
+notation; best handled by the P8 LLM fallback once that is built.
 
 ---
 
-## P7: Service API
+## Next features
 
-Goal: run `ew` as a local HTTP service so other applications can query it
-programmatically via JSON.
+### P6: Web UI
 
-### 7.1 Flask application
+Browser-based form served directly by `ew serve`. No external server needed.
 
-New `ew/server.py` using Flask. `ew serve` (from P6) launches this app.
-Flask added as an optional dependency (`ew[serve]`).
+- `ew serve` launches a local HTTP server (`localhost:8080`); `--host`/`--port` flags
+- Lookup form: text input → renders the P5 HTML label fragment inline
+- Recipe form: multi-line textarea + servings → renders the P5 recipe breakdown inline
+- Single static template (`ew/templates/index.html`); no JS framework
 
-### 7.2 JSON endpoints
+### P7: Service API
 
-| Method | Path | Body / Params | Returns |
-|--------|------|---------------|---------|
-| `GET` | `/lookup` | `?q=raw+almonds&pick=1` | food + nutrient rows as JSON |
-| `POST` | `/match` | `{"ingredient": "1 cup milk"}` | scaled nutrients as JSON |
-| `POST` | `/recipe/eval` | `{"lines": [...], "servings": 4}` | aggregate totals as JSON |
-| `GET` | `/sources` | — | loaded sources list |
+Run `ew` as a local HTTP service for programmatic access from other tools.
 
-### 7.3 Web UI integration
+- Flask app in `ew/server.py`; added as an optional dependency (`ew[serve]`)
+- JSON endpoints: `GET /lookup`, `POST /match`, `POST /recipe/eval`, `GET /sources`
+- Content negotiation: `Accept: text/html` returns rendered fragment; `Accept: application/json` returns JSON
+- `GET /` serves the P6 web UI
+- Tests via Flask's test client
 
-`GET /` serves the P6 HTML form. `/lookup` and `/recipe/eval` support both
-`Accept: text/html` (returns rendered fragment) and `Accept: application/json`
-(returns JSON).
+### P8: LLM ingredient matching
 
-### 7.4 Validation
+Fallback parser for lines the regex can't handle, improving real-world recipe coverage.
 
-Tests in `tests/test_server.py` using Flask's test client. Cover happy paths
-and 400/404 error responses for each endpoint.
-
----
-
-## P8: LLM ingredient matching
-
-Goal: fall back to an LLM when the regex parser cannot parse an ingredient
-string, improving real-world recipe coverage.
-
-### 8.1 Provider abstraction
-
-New `ew/llm.py` with an abstract `LLMProvider` interface:
-
-```python
-class LLMProvider(Protocol):
-    def extract_ingredient(self, text: str) -> dict | None:
-        """Return {"amount": float, "unit": str|None, "food": str} or None."""
-```
-
-### 8.2 Built-in providers
-
-- `AnthropicProvider` — uses `claude-haiku-4-5` for low latency and cost
-- `OllamaProvider` — calls a local Ollama instance; no API key required
-- Provider selected via `--llm-provider anthropic|ollama|none` flag (default: `none`)
-
-### 8.3 Structured output
-
-Prompt instructs the model to return a single JSON object with `amount`,
-`unit`, and `food` keys. Response validated before use; falls back to 1 g with
-a warning on parse failure.
-
-### 8.4 Response cache
-
-Parsed results cached in `work/llm_cache.sqlite` keyed on the normalised input
-string. Cache is hit before any API call. TTL: 7 days.
-
-### 8.5 Integration point
-
-`parse_ingredient()` returns `None` for strings it cannot handle. The CLI
-commands (`match`, `recipe eval`) check for `None` and, if a provider is
-configured, call `llm.extract_ingredient()` as a fallback.
-
-### 8.6 Validation
-
-Tests in `tests/test_llm.py` using a mock provider. Cover: cache hit/miss,
-malformed LLM response handling, fallback behaviour when provider is `none`.
+- `ew/llm.py` — `LLMProvider` Protocol with `extract_ingredient(text) -> dict | None`
+- Built-in providers: `AnthropicProvider` (claude-haiku-4-5) and `OllamaProvider` (local, no API key)
+- `--llm-provider anthropic|ollama|none` flag; default `none`
+- Structured JSON response (`amount`, `unit`, `food`); validated before use
+- Response cache in `work/llm_cache.sqlite` (7-day TTL) to avoid redundant API calls
+- Used as fallback when `parse_ingredient()` returns `None`
+- Tests via mock provider
 
 ---
 
 ## Deferred
 
-These are out of scope for the current roadmap:
-
-- Cross-source food deduplication (e.g., "almonds" in CNF vs. USDA foundation vs. SR legacy)
+- Cross-source food deduplication (e.g., "almonds" across CNF / USDA Foundation / SR Legacy)
 - User recipe repository (Google Docs integration)
 - Fridge/pantry tracking
 - Glycemic index data (not in CNF or USDA FDC; requires a separate source)

@@ -123,10 +123,23 @@ _UNICODE_FRACTIONS: dict[str, str] = {
 # Matched against the food_query after the amount/unit are extracted.
 _NOTE_PATTERNS = re.compile(
     r"\s+/\s+.*$"          # " / half an avocado" — slash-separated annotation
+    r"|/[^/\s][^/]*$"      # "/lime juice" — inline slash alternative (no spaces)
     r"|\s+or\s+.*$"        # " or water" — alternatives
     r"|\s*\([^)]*\)*",     # "(used 75g, …)" — parenthetical anywhere in string
     re.IGNORECASE,
 )
+
+# Leading preparation adjectives that describe how an ingredient is prepared
+# rather than what it is.  Stripped from the start of food_query before FTS.
+#
+# Intentionally conservative: only unambiguous mechanical-action verbs.
+# Words like "ground", "whole", "fresh", "raw", "dried" are excluded because
+# they are often part of the canonical food name ("ground beef", "whole milk",
+# "dried apricots") and stripping them would produce the wrong FTS query.
+_PREP_ADJECTIVES: frozenset[str] = frozenset({
+    "sliced", "diced", "chopped", "minced", "grated", "shredded",
+    "crushed", "peeled", "pitted", "trimmed", "halved", "quartered",
+})
 
 # Leading alternative-amount prefix produced by dual metric/imperial notation
 # like "1.36kg/3 lbs" — after the compact regex consumes "1.36kg", the rest
@@ -244,23 +257,32 @@ def _clean_food_query(text: str) -> str:
     """Strip noise from a food query so FTS finds clean ingredient names.
 
     Handles (in order):
-        "/3 lbs "        — leading alt-amount from "1.36kg/3 lbs of ground beef"
-        "of "            — leading "of" preposition ("cups of sliced mushrooms")
-        "(note)"         — parenthetical anywhere ("ground beef (or veal)")
-        " / annotation"  — slash-separated aside
-        " or alternative"— listed alternative ("stock or water")
-        ", descriptor"   — preparation note after comma ("onion, diced")
+        "/3 lbs "           — leading alt-amount from "1.36kg/3 lbs of ground beef"
+        "of "               — leading "of" preposition ("cups of sliced mushrooms")
+        "(note)"            — parenthetical anywhere ("ground beef (or veal)")
+        " / annotation"     — slash-separated aside (with spaces)
+        "/alternative"      — inline slash alternative ("lemon/lime juice")
+        " or alternative"   — listed alternative ("stock or water")
+        ", descriptor"      — preparation note after comma ("onion, diced")
+        leading prep words  — "sliced mushrooms" → "mushrooms"
     """
     # 1. Strip leading alternative amount (/3 lbs, /200g …)
     text = _LEADING_ALT_AMOUNT_RE.sub("", text)
     # 2. Strip leading "of " preposition
     if text.lower().startswith("of "):
         text = text[3:]
-    # 3. Strip parentheticals and slash/or notes
+    # 3. Strip parentheticals and slash/or notes (including inline /alternative)
     text = _NOTE_PATTERNS.sub("", text)
     # 4. Strip preparation note after first comma
     if "," in text:
         text = text[: text.index(",")]
+    # 5. Strip leading preparation adjectives one at a time
+    while True:
+        first, _, remainder = text.partition(" ")
+        if first.lower() in _PREP_ADJECTIVES and remainder:
+            text = remainder
+        else:
+            break
     return text.strip()
 
 
