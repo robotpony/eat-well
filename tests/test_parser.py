@@ -372,3 +372,69 @@ def test_unknown_unit_still_falls_back_to_1g():
     grams, warning = resolve_grams(2.0, "pinch", [])
     assert grams == 2.0
     assert "1 g" in warning
+
+
+# ---------------------------------------------------------------------------
+# Parenthetical amount fallback
+# ---------------------------------------------------------------------------
+
+def test_paren_amount_basic():
+    r = parse_ingredient("garlic powder (1 teaspoon)")
+    assert r is not None
+    assert r.amount == 1.0
+    assert r.unit == "teaspoon"
+    assert r.food_query == "garlic powder"
+
+
+def test_paren_amount_unicode_fraction():
+    # Unicode fraction is normalised before the paren regex is applied
+    r = parse_ingredient("garlic powder (½ teaspoon)")
+    assert r is not None
+    assert r.amount == pytest.approx(0.5)
+    assert r.unit == "teaspoon"
+    assert r.food_query == "garlic powder"
+
+
+def test_paren_amount_no_unit():
+    # "cumin (2)" — amount but no unit word
+    r = parse_ingredient("cumin (2)")
+    assert r is not None
+    assert r.amount == 2.0
+    assert r.unit is None
+    assert r.food_query == "cumin"
+
+
+def test_paren_amount_mixed_fraction():
+    r = parse_ingredient("cinnamon (1 1/2 tsp)")
+    assert r is not None
+    assert r.amount == pytest.approx(1.5)
+    assert r.unit == "tsp"
+    assert r.food_query == "cinnamon"
+
+
+def test_paren_amount_metric_unit():
+    r = parse_ingredient("salt (5 g)")
+    assert r is not None
+    assert r.amount == 5.0
+    assert r.unit == "g"
+    assert r.food_query == "salt"
+
+
+def test_paren_amount_non_numeric_not_parsed():
+    # "thyme (big pinch)" — no leading number inside paren → returns None
+    r = parse_ingredient("thyme (big pinch)")
+    assert r is None
+
+
+def test_paren_amount_to_taste_not_parsed():
+    # "salt, pepper (to taste)" — no leading number → returns None
+    r = parse_ingredient("salt, pepper (to taste)")
+    assert r is None
+
+
+def test_paren_amount_unknown_unit_is_none():
+    # Unit inside paren is not in any known unit table → unit=None
+    r = parse_ingredient("paprika (1 pinch)")
+    assert r is not None
+    assert r.unit is None
+    assert r.food_query == "paprika"

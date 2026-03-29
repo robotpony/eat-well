@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.14 — 2026-03-29
+
+- Fixed quality item 6: parser now handles amount-in-parentheses notation (e.g. `garlic powder (½ teaspoon)`)
+  - New `_PAREN_AMOUNT_RE` in `parser.py` scans for `food name (amount unit)` when no leading number is found
+  - Supports mixed fractions, simple fractions, decimals, and Unicode fractions inside the parenthesis
+  - Known unit words (metric, volume, piece) are resolved normally; unrecognised units (e.g. `pinch`) set `unit=None`
+  - Lines with non-numeric parentheticals (`to taste`, `big pinch`) continue to return None
+  - Item 6 marked done in PLAN.md
+- 8 new tests in `tests/test_parser.py` (159 total)
+
 ## 0.1.13 — 2026-03-29
 
 - Fixed FTS re-ranking bias toward long compound food names (quality item 4)

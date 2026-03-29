@@ -47,10 +47,14 @@ Fixed by adding `_PIECE_GRAM_ESTIMATES` in `parser.py` covering cloves, heads,
 sprigs, bunches, stalks, ears, strips, and leaves. Used as a fallback after the
 food_portion lookup fails, with an "estimated N g each" warning.
 
-### 6. Amount buried in parentheses
+### 6. Amount buried in parentheses *(done)*
 
-`garlic powder (½ teaspoon)` → parser returns None (no leading number). Unusual
-notation; best handled by the P8 LLM fallback once that is built.
+`garlic powder (½ teaspoon)` → parser returns None (no leading number).
+
+Fixed by `_PAREN_AMOUNT_RE` in `parser.py`: when no leading number is found,
+the regex scans for `food name (amount unit)` and extracts the buried amount.
+Unicode fractions are normalised before matching. Lines with non-numeric
+parentheticals (`to taste`, `big pinch`) continue to return None.
 
 ---
 

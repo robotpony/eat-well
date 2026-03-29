@@ -163,6 +163,19 @@ _PREP_ADJECTIVES: frozenset[str] = frozenset({
     "crushed", "peeled", "pitted", "trimmed", "halved", "quartered",
 })
 
+# Parenthetical amount: "garlic powder (½ teaspoon)" or "cumin (1 tsp)"
+# Group 1: food name before the parenthesis
+# Group 2: amount inside  (mixed fraction, simple fraction, or decimal/integer)
+# Group 3: optional unit word inside the parenthesis
+_PAREN_AMOUNT_RE = re.compile(
+    r"^(.+?)"                                             # food name (non-greedy)
+    r"\s*\("
+    r"(\d+\s+\d+/\d+|\d+/\d+|\d+(?:\.\d+)?)"            # amount
+    r"(?:\s+([a-zA-Z]+(?:\.[a-zA-Z]*)?))?"               # optional unit
+    r"[^)]*\)",                                           # rest of parenthetical
+    re.IGNORECASE,
+)
+
 # Leading alternative-amount prefix produced by dual metric/imperial notation
 # like "1.36kg/3 lbs" — after the compact regex consumes "1.36kg", the rest
 # starts with "/3 lbs ".  Strip: /NUMBER UNIT whitespace.
@@ -213,6 +226,18 @@ def parse_ingredient(text: str) -> Optional[ParsedIngredient]:
     # Leading amount
     m = _AMOUNT_RE.match(text)
     if not m:
+        # Parenthetical amount fallback: "garlic powder (½ teaspoon)"
+        pm = _PAREN_AMOUNT_RE.match(text)
+        if pm:
+            food_name_raw = pm.group(1).strip()
+            amount_m = _AMOUNT_RE.match(pm.group(2))
+            if amount_m:
+                p_amount = _parse_matched_amount(amount_m)
+                unit_raw = (pm.group(3) or "").lower().rstrip(".")
+                p_unit: Optional[str] = unit_raw if (unit_raw in _DIRECT_G or unit_raw in _PORTION_UNITS) else None
+                food_query = _clean_food_query(food_name_raw)
+                if food_query:
+                    return ParsedIngredient(p_amount, p_unit, food_query, raw)
         return None
 
     amount = _parse_matched_amount(m)
