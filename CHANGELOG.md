@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5 — 2026-03-28
+
+- Rewrote README to focus on setup and usage; removed phases and aspirational features list
+- Added `setup` script — creates venv and installs the package in one step
+- Data download instructions moved entirely to `import/README.md`
+
 ## 0.1.4 — 2026-03-28
 
 - Added `ew lookup QUERY` command (P1 complete)
