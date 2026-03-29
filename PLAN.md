@@ -15,34 +15,30 @@ optional per-serving column.
 
 ---
 
-## P5: HTML output
+## ~~P5: HTML output~~ ✓
 
 Goal: export nutrition labels and recipe summaries as styled HTML files.
 
-### 5.1 `--format html` flag
+### 5.1 `--format html` flag ✓
 
-Add `--format html` to `ew lookup` and `ew recipe eval`. When set, output is an
-HTML document instead of rich console output.
+`ew lookup --format html` and `ew recipe eval --format html` emit a complete
+HTML document. Default remains `console` — no behaviour change without the flag.
 
-### 5.2 HTML renderer
+### 5.2 HTML renderer ✓
 
-New `ew/html.py` module with:
-- `render_label_html(nutrients, food_name, per_g, portion)` — nutrition label table
-- `render_recipe_html(results, title, servings)` — full recipe breakdown
-- Inline CSS only; no external dependencies or frameworks
-- Visual parity with the rich console layout (sections, two-column label)
+`ew/html.py`: `render_label_html()` and `render_recipe_html()`. Inline CSS
+only; system-font minimal style with section headers, indented nutrients, and
+status icons (✓ / ✗ / △) for recipe ingredients.
 
-### 5.3 `--output FILE` flag
+### 5.3 `--output FILE` flag ✓
 
-Write HTML to a file instead of stdout. Default behaviour (no flag) prints to
-stdout so it can be piped.
+Available on both `lookup` and `recipe eval` for any `--format`. Writes to a
+file; prints to stdout when omitted.
 
-### 5.4 Validation
+### 5.4 Validation ✓
 
-Unit tests in `tests/test_html.py` covering:
-- Label and recipe renderers produce valid HTML fragments
-- Section grouping matches `lookup.SECTIONS` order
-- `--output` writes the file and the file is non-empty
+26 tests in `tests/test_html.py`: complete document, escaping, icons, columns,
+section grouping, `--output` helper.
 
 ---
 

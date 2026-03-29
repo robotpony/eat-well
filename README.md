@@ -29,10 +29,12 @@ ew lookup "raw almonds"
 Shows the top matches and prompts you to pick one if there are multiple results. Displays a two-column nutrition label: per 100 g and per the first listed portion.
 
 ```bash
-ew lookup "whole milk" --per 250        # second column: per 250 g
-ew lookup "lait entier" --lang fr       # search and display in French (CNF foods)
-ew lookup "almonds" --pick 2            # skip the prompt, auto-select match 2
-ew lookup "raw almonds" --format md     # output as a GFM markdown table
+ew lookup "whole milk" --per 250              # second column: per 250 g
+ew lookup "lait entier" --lang fr             # search and display in French (CNF foods)
+ew lookup "almonds" --pick 2                  # skip the prompt, auto-select match 2
+ew lookup "raw almonds" --format md           # output as a GFM markdown table
+ew lookup "raw almonds" --format html         # output as a styled HTML document
+ew lookup "raw almonds" --format html --output label.html   # write to file
 ```
 
 Example output (truncated):
@@ -78,10 +80,11 @@ ew match "100g almonds"
 ```
 
 ```bash
-ew recipe eval ingredients.txt           # aggregate nutrition across a recipe
+ew recipe eval ingredients.txt                    # aggregate nutrition across a recipe
 ew recipe eval - < ingredients.txt
 ew recipe eval breakfast.txt --servings 2
-ew recipe eval ingredients.txt --format md   # output as markdown tables
+ew recipe eval ingredients.txt --format md        # output as markdown tables
+ew recipe eval ingredients.txt --format html --output recipe.html   # styled HTML file
 ```
 
 Ingredient file format — one per line:
@@ -101,4 +104,4 @@ Each line is parsed for a leading quantity and optional unit, then matched to th
 pytest tests/
 ```
 
-105 tests, all in-memory — no data files required. See `ARCHITECTURE.md` for schema details and `PLAN.md` for the roadmap.
+131 tests, all in-memory — no data files required. See `ARCHITECTURE.md` for schema details and `PLAN.md` for the roadmap.

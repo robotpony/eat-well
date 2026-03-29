@@ -110,8 +110,9 @@ def import_cmd(db, import_dir):
 @click.option("--pick", "pick_n", default=None, type=int, metavar="N", help="Auto-select match N without prompting")
 @click.option("--per", "per_grams", default=None, type=float, metavar="GRAMS", help="Second column: per N grams (default: first portion)")
 @click.option("--lang", default="en", type=click.Choice(["en", "fr"]), show_default=True, help="Search and display language")
-@click.option("--format", "fmt", default="console", type=click.Choice(["console", "md"]), show_default=True, help="Output format")
-def lookup(query, db, pick_n, per_grams, lang, fmt):
+@click.option("--format", "fmt", default="console", type=click.Choice(["console", "md", "html"]), show_default=True, help="Output format")
+@click.option("--output", "output_file", default=None, metavar="FILE", help="Write output to FILE instead of stdout")
+def lookup(query, db, pick_n, per_grams, lang, fmt, output_file):
     """Look up nutrition information for a food.
 
     QUERY is a plain-text search string, e.g. \"raw almonds\" or \"whole milk\".
@@ -166,7 +167,12 @@ def lookup(query, db, pick_n, per_grams, lang, fmt):
 
     if fmt == "md":
         from .markdown import render_label_md
-        click.echo(render_label_md(food, nutrients, portions, per_grams, lang))
+        text = render_label_md(food, nutrients, portions, per_grams, lang)
+        _write_output(text, output_file)
+    elif fmt == "html":
+        from .html import render_label_html
+        text = render_label_html(food, nutrients, portions, per_grams, lang)
+        _write_output(text, output_file)
     else:
         render_label(_console, food, nutrients, portions, per_grams, lang)
 
@@ -232,8 +238,9 @@ def recipe():
 @click.option("--db", default=None, metavar="PATH", help="Database path (default: ./work/ew.db)")
 @click.option("--servings", default=None, type=click.IntRange(min=1), metavar="N", help="Show a per-serving column")
 @click.option("--lang", default="en", type=click.Choice(["en", "fr"]), show_default=True, help="Search and display language")
-@click.option("--format", "fmt", default="console", type=click.Choice(["console", "md"]), show_default=True, help="Output format")
-def recipe_eval(file, db, servings, lang, fmt):
+@click.option("--format", "fmt", default="console", type=click.Choice(["console", "md", "html"]), show_default=True, help="Output format")
+@click.option("--output", "output_file", default=None, metavar="FILE", help="Write output to FILE instead of stdout")
+def recipe_eval(file, db, servings, lang, fmt, output_file):
     """Evaluate the nutrition of a recipe from an ingredient list.
 
     FILE is a text file with one ingredient per line (amount unit food).
@@ -296,12 +303,17 @@ def recipe_eval(file, db, servings, lang, fmt):
         _console.print("[dim]No ingredient lines found.[/dim]")
         return
 
-    # --- Markdown output ---
-    if fmt == "md":
-        from .markdown import render_recipe_md
-        matched_md = [r for r in results if isinstance(r, MatchResult)]
-        totals_md = aggregate([r.nutrients for r in matched_md])
-        click.echo(render_recipe_md(results, totals_md, servings))
+    # --- Non-console output ---
+    if fmt in ("md", "html"):
+        matched_nc = [r for r in results if isinstance(r, MatchResult)]
+        totals_nc = aggregate([r.nutrients for r in matched_nc])
+        if fmt == "md":
+            from .markdown import render_recipe_md
+            text = render_recipe_md(results, totals_nc, servings)
+        else:
+            from .html import render_recipe_html
+            text = render_recipe_html(results, totals_nc, servings)
+        _write_output(text, output_file)
         return
 
     # --- Ingredient table ---
@@ -423,6 +435,14 @@ def sources(db):
     for row in rows:
         table.add_row(row["code"], row["name"], row["version"] or "—", f"{row['foods']:,}")
     _console.print(table)
+
+
+def _write_output(text: str, output_file: str | None) -> None:
+    """Write *text* to *output_file*, or to stdout if output_file is None."""
+    if output_file:
+        Path(output_file).write_text(text, encoding="utf-8")
+    else:
+        click.echo(text, nl=False)
 
 
 def _print_source(counts: dict[str, int]) -> None:

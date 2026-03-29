@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.11 — 2026-03-29
+
+- Implemented P5: HTML output (P5 complete)
+- New `ew/html.py`: `render_label_html()` and `render_recipe_html()` — complete HTML documents with inline CSS
+- Style matches design reference: system-font, minimal borders, bold section headers, indented nutrients, status icons (✓ ✗ △) for recipe ingredients
+- `ew lookup --format html` and `ew recipe eval --format html` emit a styled HTML document
+- `--output FILE` flag on both commands writes to a file (any format); prints to stdout when omitted
+- HTML output escapes all user-derived strings to prevent XSS
+- 26 new tests in `tests/test_html.py` (131 total)
+
 ## 0.1.10 — 2026-03-28
 
 - Implemented P4: markdown output (P4 complete)
