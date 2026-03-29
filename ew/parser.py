@@ -109,6 +109,33 @@ _COMPACT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Normalise common Unicode fraction characters to ASCII equivalents before
+# attempting to match the amount regex.
+_UNICODE_FRACTIONS: dict[str, str] = {
+    "½": "1/2", "⅓": "1/3", "⅔": "2/3",
+    "¼": "1/4", "¾": "3/4",
+    "⅛": "1/8", "⅜": "3/8", "⅝": "5/8", "⅞": "7/8",
+    "⅙": "1/6", "⅚": "5/6",
+    "⅕": "1/5", "⅖": "2/5", "⅗": "3/5", "⅘": "4/5",
+}
+
+# Patterns that mark the end of the food name and the start of a note.
+# Matched against the food_query after the amount/unit are extracted.
+_NOTE_PATTERNS = re.compile(
+    r"\s+/\s+.*$"          # " / half an avocado" — slash-separated annotation
+    r"|\s+or\s+.*$"        # " or water" — alternatives
+    r"|\s*\([^)]*\)*",     # "(used 75g, …)" — parenthetical anywhere in string
+    re.IGNORECASE,
+)
+
+# Leading alternative-amount prefix produced by dual metric/imperial notation
+# like "1.36kg/3 lbs" — after the compact regex consumes "1.36kg", the rest
+# starts with "/3 lbs ".  Strip: /NUMBER UNIT whitespace.
+_LEADING_ALT_AMOUNT_RE = re.compile(
+    r"^/\d+(?:\.\d+)?\s*(?:pounds?|lbs?|kg|mg|ml|mL|cups?|tbsp|tsp|oz|g|l|L)?\s*",
+    re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -136,10 +163,14 @@ def parse_ingredient(text: str) -> Optional[ParsedIngredient]:
     if not text or text.startswith("#"):
         return None
 
+    # Normalise Unicode fraction characters so "½ tsp" parses as "1/2 tsp".
+    for uc, ascii_frac in _UNICODE_FRACTIONS.items():
+        text = text.replace(uc, ascii_frac)
+
     # Compact unit ("100g almonds")
     m = _COMPACT_RE.match(text)
     if m:
-        food_query = m.group(3).strip()
+        food_query = _clean_food_query(m.group(3).strip())
         if not food_query:
             return None
         return ParsedIngredient(float(m.group(1)), m.group(2).lower(), food_query, raw)
@@ -165,10 +196,11 @@ def parse_ingredient(text: str) -> Optional[ParsedIngredient]:
         unit = None
         food_query = rest
 
-    if not food_query.strip():
+    food_query = _clean_food_query(food_query.strip())
+    if not food_query:
         return None
 
-    return ParsedIngredient(amount, unit, food_query.strip(), raw)
+    return ParsedIngredient(amount, unit, food_query, raw)
 
 
 def resolve_grams(
@@ -207,6 +239,30 @@ def resolve_grams(
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
+def _clean_food_query(text: str) -> str:
+    """Strip noise from a food query so FTS finds clean ingredient names.
+
+    Handles (in order):
+        "/3 lbs "        — leading alt-amount from "1.36kg/3 lbs of ground beef"
+        "of "            — leading "of" preposition ("cups of sliced mushrooms")
+        "(note)"         — parenthetical anywhere ("ground beef (or veal)")
+        " / annotation"  — slash-separated aside
+        " or alternative"— listed alternative ("stock or water")
+        ", descriptor"   — preparation note after comma ("onion, diced")
+    """
+    # 1. Strip leading alternative amount (/3 lbs, /200g …)
+    text = _LEADING_ALT_AMOUNT_RE.sub("", text)
+    # 2. Strip leading "of " preposition
+    if text.lower().startswith("of "):
+        text = text[3:]
+    # 3. Strip parentheticals and slash/or notes
+    text = _NOTE_PATTERNS.sub("", text)
+    # 4. Strip preparation note after first comma
+    if "," in text:
+        text = text[: text.index(",")]
+    return text.strip()
+
 
 def _parse_matched_amount(m: re.Match) -> float:
     if m.group(1) is not None:                               # mixed fraction

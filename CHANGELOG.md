@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.9 — 2026-03-28
+
+- Fixed three parser bugs that caused most `beef-base.md` ingredients to return zero FTS results
+- `parse_ingredient` now strips leading `of ` preposition after unit extraction (`4 cups of sliced mushrooms` → food_query `sliced mushrooms`)
+- `parse_ingredient` now strips `, preparation note` after the first comma (`1 onion, diced` → `onion`)
+- `parse_ingredient` now strips leading alternative-amount prefix from dual metric/imperial notation (`1.36kg/3 lbs of ground beef` → food_query `ground beef`)
+- Fixed unit-alternation ordering in `_LEADING_ALT_AMOUNT_RE` so `lbs` is matched before the bare `l` (litre) alternative
+- `_NOTE_PATTERNS` parenthetical match now applies anywhere in the string, not only at the end
+- 8 new tests in `tests/test_parser.py` (88 total, all passing)
+
+## 0.1.8 — 2026-03-28
+
+- Fixed parser dropping real-world recipe annotations that caused FTS to return zero results
+- `parse_ingredient` now strips trailing ` / annotation` (e.g. "50g avocado / half an avocado")
+- `parse_ingredient` now strips trailing parenthetical notes (e.g. "10g ginger (grated/jarred)")
+- `parse_ingredient` now strips trailing ` or alternative` (e.g. "1 tbsp stock or water")
+- Unicode fraction characters (½ ¼ ¾ ⅓ ⅔ etc.) are now normalised to ASCII before parsing
+- 7 new tests in `tests/test_parser.py` (81 total)
+- Renamed `example-recipes/avacado-dressing.md` → `avocado-dressing.md`
+
 ## 0.1.7 — 2026-03-28
 
 - Added `ew match INGREDIENT` command (P2 complete)

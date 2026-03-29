@@ -11,6 +11,7 @@ work/
 # Import data (large, not checked in)
 import/usa/
 import/cad/
+example-recipes/
 
 # Python packaging / build artifacts
 *.egg-info/

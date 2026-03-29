@@ -122,13 +122,6 @@ Output: aggregate nutrition totals + per-portion breakdown (if `--servings N` gi
 
 ---
 
-## P3: Batch interface
-
-Goal: provide nutrition for mutliple ingredients (via text or JSON)
-
-
----
-
 ## P4: Markdown generation
 
 Goal: produce formatted output suitable for notes, docs, or a future web view.
@@ -140,6 +133,16 @@ Nutrition label as a markdown table. Useful for Obsidian, GitHub, or recipe docs
 ### 4.2 `ew recipe eval --format md`
 
 Full recipe nutrition breakdown as markdown.
+
+
+---
+
+## Next features
+
+1. HTML output, matching the lovely output of the console, including the recipe summary
+2. HTML form input
+3. Service API (for running as a local service, for other application access)
+4. LLM matching, for better parsing of recipes
 
 ---
 

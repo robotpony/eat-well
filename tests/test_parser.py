@@ -82,6 +82,102 @@ def test_cloves():
 
 
 # ---------------------------------------------------------------------------
+# parse_ingredient — note and annotation stripping
+# ---------------------------------------------------------------------------
+
+def test_slash_annotation_stripped():
+    r = parse_ingredient("50g avocado / half an avocado")
+    assert r is not None
+    assert r.food_query == "avocado"
+
+
+def test_parenthetical_note_stripped():
+    r = parse_ingredient("10g ginger (grated/jarred)")
+    assert r is not None
+    assert r.food_query == "ginger"
+
+
+def test_or_alternative_stripped():
+    r = parse_ingredient("1 tbsp chicken stock or drippings")
+    assert r is not None
+    assert r.food_query == "chicken stock"
+
+
+def test_parenthetical_and_note_combined():
+    r = parse_ingredient("50g lemon juice (used 75g, was too much)")
+    assert r is not None
+    assert r.food_query == "lemon juice"
+
+
+def test_comma_descriptor_stripped():
+    r = parse_ingredient("1 onion, diced")
+    assert r is not None
+    assert r.food_query == "onion"
+
+
+def test_comma_descriptor_shallot():
+    r = parse_ingredient("1 shallot, diced")
+    assert r is not None
+    assert r.food_query == "shallot"
+
+
+def test_comma_descriptor_garlic():
+    r = parse_ingredient("4 cloves of garlic, diced")
+    assert r is not None
+    assert r.food_query == "garlic"
+
+
+def test_of_preposition_stripped():
+    r = parse_ingredient("4 cups of sliced mushrooms")
+    assert r is not None
+    assert r.unit == "cups"
+    assert r.food_query == "sliced mushrooms"
+
+
+def test_dual_metric_imperial_amount():
+    r = parse_ingredient("1.36kg/3 lbs of ground beef (or a mix of beef/veal/pork)")
+    assert r is not None
+    assert r.amount == 1.36
+    assert r.unit == "kg"
+    assert r.food_query == "ground beef"
+
+
+def test_salt_pepper_skipped():
+    # "Salt/pepper" has no leading number — should return None
+    assert parse_ingredient("Salt/pepper") is None
+
+
+def test_optional_ingredient_parenthetical():
+    r = parse_ingredient("2 tsp Accent (optional)")
+    assert r is not None
+    assert r.food_query == "Accent"
+
+
+# ---------------------------------------------------------------------------
+# parse_ingredient — Unicode fractions
+# ---------------------------------------------------------------------------
+
+def test_unicode_half_fraction():
+    r = parse_ingredient("½ tsp salt")
+    assert r is not None
+    assert abs(r.amount - 0.5) < 1e-9
+    assert r.unit == "tsp"
+    assert r.food_query == "salt"
+
+
+def test_unicode_quarter_fraction():
+    r = parse_ingredient("¼ cup sugar")
+    assert r is not None
+    assert abs(r.amount - 0.25) < 1e-9
+
+
+def test_unicode_three_quarters():
+    r = parse_ingredient("¾ cup flour")
+    assert r is not None
+    assert abs(r.amount - 0.75) < 1e-9
+
+
+# ---------------------------------------------------------------------------
 # parse_ingredient — returns None cases
 # ---------------------------------------------------------------------------
 
