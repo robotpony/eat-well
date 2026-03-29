@@ -1,62 +1,5 @@
 # Implementation Plan
 
-## Quality improvements (from recipe output review)
-
-Issues identified by running both example recipes and reviewing output.
-
-### 1. Table column collapse *(done)*
-
-The `input` column is `no_wrap=True`, which on long ingredient lines claims most
-of the terminal width and squeezes match names and notes to ~3 visible characters.
-Fix: allow the input column to wrap/truncate; constrain the note column to a
-fixed max width.
-
-### 2. Preparation adjectives stripped from food query *(done)*
-
-`4 cups of sliced mushrooms` → food_query `sliced mushrooms` → FTS requires
-"sliced" AND "mushrooms" → no match. Common leading prep adjectives (`sliced`,
-`diced`, `chopped`, `minced`, `fresh`, `dried`, `cooked`, `raw`) should be
-stripped just as comma-descriptors after the noun already are.
-
-### 3. Inline slash alternative without spaces *(done)*
-
-`50g lemon/lime juice` → food_query `lemon/lime juice`. `_NOTE_PATTERNS` only
-strips ` / annotation` (with surrounding spaces). After `_build_fts_query`
-removes the `/`, FTS searches `"lemon" AND "lime" AND "juice"` — no single food
-has all three → no match. Should strip `/alternative` (no surrounding spaces)
-leaving `lemon juice`.
-
-### 4. Wrong top FTS match for short queries *(done)*
-
-`avocado` → "Oil, avocado"; `onion` → "Bread, onion". BM25 ranks long compound
-names above short exact matches. A post-FTS re-ranking step penalising food
-names much longer than the query would fix both cases.
-
-Fixed by fetching a wider FTS candidate pool (4× limit, min 20) and stable-sorting
-by whether the food name's first component matches a query word. BM25 order is
-preserved as a tiebreaker within each group.
-
-### 5. Piece-unit 1g fallback underestimates common ingredients *(done)*
-
-`1 shallot` and `4 cloves garlic` fall back to 1g/item because the DB has no
-portion data for them. A built-in weight table (shallot ≈ 30g, garlic clove ≈
-6g, egg ≈ 50g, etc.) as a second fallback before the 1g last resort would
-significantly improve totals accuracy.
-
-Fixed by adding `_PIECE_GRAM_ESTIMATES` in `parser.py` covering cloves, heads,
-sprigs, bunches, stalks, ears, strips, and leaves. Used as a fallback after the
-food_portion lookup fails, with an "estimated N g each" warning.
-
-### 6. Amount buried in parentheses *(done)*
-
-`garlic powder (½ teaspoon)` → parser returns None (no leading number).
-
-Fixed by `_PAREN_AMOUNT_RE` in `parser.py`: when no leading number is found,
-the regex scans for `food name (amount unit)` and extracts the buried amount.
-Unicode fractions are normalised before matching. Lines with non-numeric
-parentheticals (`to taste`, `big pinch`) continue to return None.
-
----
 
 ## Next features
 
@@ -90,6 +33,57 @@ Fallback parser for lines the regex can't handle, improving real-world recipe co
 - Response cache in `work/llm_cache.sqlite` (7-day TTL) to avoid redundant API calls
 - Used as fallback when `parse_ingredient()` returns `None`
 - Tests via mock provider
+
+### P9: Enhanced ingredient resolution
+
+Four sub-tasks that share a common pattern: bundled defaults + user override layer in `work/`.
+
+#### P9a: Food alias table
+
+Map abbreviations and common synonyms to searchable food names before FTS.
+
+- Bundled aliases ship with the package (`ew/data/aliases.json`): `"msg"` → `"monosodium glutamate"`, `"e621"` → `"monosodium glutamate"`, `"evoo"` → `"olive oil"`, etc.
+- User alias table stored in `work/ew.db` (`user_food_alias`): same schema, takes priority over bundled list
+- Applied in `_clean_food_query()` as a final substitution step after noise stripping
+- When `recipe eval` encounters a no-match, prompt the user: *"No result for 'X'. Enter a better search term (or blank to skip):"* — saves non-blank answers to `user_food_alias`
+- `ew alias list` shows all aliases (bundled + user); `ew alias add MSG "monosodium glutamate"` adds one manually
+- Tests: alias substitution, user alias priority over bundled, no-match prompt path
+
+#### P9b: Food weight reference table
+
+Per-food, per-unit gram estimates that extend and supersede the generic `_PIECE_GRAM_ESTIMATES` table in `parser.py`.
+
+- Bundled reference ships with the package (`ew/data/food_weights.json`): food key (substring match) + unit → grams + note
+  - Examples: `shallot + each → 30g`, `mushroom + cup → 70g (sliced)`, `onion + medium → 110g`, `onion + cup → 160g (chopped)`, `spinach + cup → 30g`
+- User overrides stored in `work/food_weights.json`; loaded and merged on startup, user entries win
+- Lookup order in `resolve_grams()`: direct metric → food_portion DB → food weight reference (food-specific) → `_PIECE_GRAM_ESTIMATES` (unit-only) → 1g fallback
+- Food key matching: exact then substring (`"sliced mushrooms"` → `"mushroom"` key matches)
+- `ew weights list [food]` shows reference entries; `ew weights add "shallot" each 30` adds one manually
+- Tests: exact match, substring match, user override, fallback chain
+
+#### P9c: Interactive resolution
+
+Prompt the user during `recipe eval` when gram resolution falls back to 1g, so estimates improve over time.
+
+- Opt-in via `--interactive` / `-i` flag on `ew recipe eval`
+- After initial parse pass, collect all lines that used the 1g fallback or had no food match
+- For each, prompt: *"'1 shallot' resolved to 1g. Enter weight in grams [skip]:"*
+- Valid answers are cached to `work/user_portions.json` keyed by `(food_query, unit)` — used by `resolve_grams()` on subsequent runs before the 1g fallback
+- Non-interactive runs (no `-i`) are silent; piped output and CI are unaffected
+- `ew portions list` shows cached answers; `ew portions clear` removes them
+- Tests: cache write, cache read on next call, silent mode when flag absent
+
+#### P9d: "To taste" defaults
+
+Resolve unquantified seasoning lines (e.g., `salt, pepper (to taste)`) to a reasonable default rather than skipping.
+
+- Bundled defaults table (`ew/data/taste_defaults.json`): maps food name patterns to a default amount + unit
+  - `salt → 2g`, `pepper → 0.5g`, `spice / seasoning (generic) → 0.5g`
+- When `parse_ingredient()` returns `None` and the food text matches a known to-taste item, emit a `ParsedIngredient` with the default amount and a `"to-taste default, assumed Xg"` note
+- Scaled by `--servings N` when specified (the default is per-serving; 2 servings → 2× the default)
+- User can override defaults in `work/taste_defaults.json`
+- Matching is conservative: requires a food key match; ambiguous lines (no recognisable food name) still return `None`
+- Tests: salt default, pepper default, servings scaling, unrecognised line still returns None
 
 ---
 

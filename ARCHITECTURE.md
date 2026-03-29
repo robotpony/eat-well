@@ -94,6 +94,32 @@ These are populated during import but not queried at runtime:
 - `food_refuse` — inedible portion by weight (CNF: REFUSE AMOUNT). Used to adjust gram weights for whole foods (e.g., banana with peel).
 - `food_yield` — cooking weight change factor (CNF: YIELD AMOUNT). Tracks how raw-to-cooked weight ratios affect nutrient density.
 
+### User resolution tables (P9)
+
+These tables live in `work/ew.db` alongside the main data and accumulate over time as the user resolves unknowns.
+
+```sql
+-- User-defined food name aliases, e.g. "msg" → "monosodium glutamate".
+-- Merged with bundled aliases from ew/data/aliases.json; user entries win on conflict.
+CREATE TABLE user_food_alias (
+    id          INTEGER PRIMARY KEY,
+    input_key   TEXT NOT NULL UNIQUE,   -- normalised lower-case query fragment
+    replacement TEXT NOT NULL,          -- substitute search term
+    created_at  TEXT NOT NULL           -- ISO-8601 timestamp
+);
+
+-- User-cached gram resolutions from interactive recipe eval sessions.
+-- Keyed by (food_query, unit); consulted by resolve_grams() before the 1g fallback.
+CREATE TABLE user_portion_cache (
+    id          INTEGER PRIMARY KEY,
+    food_query  TEXT NOT NULL,
+    unit        TEXT,                   -- NULL for unitless (piece counts)
+    gram_weight REAL NOT NULL,
+    created_at  TEXT NOT NULL,
+    UNIQUE (food_query, unit)
+);
+```
+
 ### FTS index (full-text search)
 
 ```sql
@@ -106,6 +132,51 @@ CREATE VIRTUAL TABLE food_fts USING fts5(
 ```
 
 Populated after import. Powers `ew lookup "raw almonds"` with ranking by relevance.
+
+### Bundled reference data (P9)
+
+Static JSON files shipped inside the package under `ew/data/`. Read once at startup and merged with any user overrides from `work/`.
+
+| File | Purpose |
+|---|---|
+| `ew/data/aliases.json` | Food name aliases: `{"msg": "monosodium glutamate", "evoo": "olive oil", …}` |
+| `ew/data/food_weights.json` | Per-food gram estimates: `[{"key": "shallot", "unit": "each", "grams": 30}, …]` |
+| `ew/data/taste_defaults.json` | To-taste defaults: `[{"key": "salt", "grams": 2, "unit": "g"}, …]` |
+
+User overrides follow the same schema and live in `work/`. They are merged at load time; user entries always win.
+
+## Ingredient Resolution Pipeline (P2 / P9)
+
+The full resolution pipeline for a single ingredient line, in order:
+
+```
+raw text
+  │
+  ├─ unicode normalisation (½ → 1/2)
+  ├─ compact-unit match  ("100g almonds")
+  ├─ leading-amount match  ("2 cups flour")
+  │     └─ parenthetical-amount fallback  ("garlic powder (½ tsp)")
+  │
+  ├─ _clean_food_query()
+  │     ├─ strip alt-amount prefix  ("/3 lbs")
+  │     ├─ strip "of " preposition
+  │     ├─ strip parentheticals and slash/or notes
+  │     ├─ strip comma descriptor
+  │     ├─ strip prep adjectives  (sliced, diced, …)
+  │     └─ alias substitution  ("msg" → "monosodium glutamate")   ← P9a
+  │
+  ├─ to-taste default lookup  (salt → 2g when no amount found)    ← P9d
+  │
+  └─ FTS search → _rerank() → best match
+        │
+        └─ resolve_grams()
+              ├─ direct metric table  (g, kg, ml, …)
+              ├─ food_portion DB lookup
+              ├─ user portion cache                                ← P9c
+              ├─ food weight reference  (food + unit)             ← P9b
+              ├─ _PIECE_GRAM_ESTIMATES  (unit-only)
+              └─ 1g fallback  (+interactive prompt when -i)       ← P9c
+```
 
 ## Import Pipeline
 
