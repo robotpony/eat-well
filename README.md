@@ -18,8 +18,9 @@ A tool for learning about food and planning what to eat.
 
 | Phase | Description | Status |
 |---|---|---|
-| P1 | Data import, schema, CLI | ✓ Done |
-| P2 | Query tools | Planned |
+| P0 | Data import and schema | ✓ Done |
+| P1 | CLI lookup tool (`ew lookup`) | Planned |
+| P2 | Query tools (`ew match`, `ew recipe eval`) | Planned |
 | P3 | Markdown output | Planned |
 
 ## Setup
