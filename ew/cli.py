@@ -166,6 +166,219 @@ def lookup(query, db, pick_n, per_grams, lang):
 
 
 @cli.command()
+@click.argument("ingredient")
+@click.option("--db", default=None, metavar="PATH", help="Database path (default: ./work/ew.db)")
+@click.option("--lang", default="en", type=click.Choice(["en", "fr"]), show_default=True, help="Search and display language")
+def match(ingredient, db, lang):
+    """Look up a single ingredient with quantity and show scaled nutrients.
+
+    INGREDIENT is a quantity + food string, e.g. \"1 cup whole milk\" or \"100g almonds\".
+    The best FTS match is selected automatically.
+    """
+    from .lookup import search, get_food, get_nutrients, get_portions, render_label
+    from .parser import parse_ingredient, resolve_grams
+
+    parsed = parse_ingredient(ingredient)
+    if parsed is None:
+        _console.print(
+            "[red]Could not parse ingredient.[/red] "
+            "Include a quantity, e.g. [bold]'1 cup whole milk'[/bold]."
+        )
+        raise SystemExit(1)
+
+    db_p = _db_path(db)
+    if not db_p.exists():
+        _console.print(
+            f"[red]Database not found at {db_p}. Run 'ew import' first.[/red]",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    conn = connect(db_p)
+    matches = search(conn, parsed.food_query, lang=lang, limit=1)
+    if not matches:
+        _console.print(f"[red]No match found for:[/red] {parsed.food_query}")
+        raise SystemExit(1)
+
+    food = get_food(conn, matches[0].id)
+    portions = get_portions(conn, matches[0].id)
+    grams, warning = resolve_grams(parsed.amount, parsed.unit, portions)
+
+    if warning:
+        _console.print(f"[yellow]⚠ {warning}[/yellow]")
+
+    _console.print(
+        f"\n[dim]{parsed.raw.strip()}[/dim]  [dim]→[/dim]  "
+        f"[bold]{food['name_en']}[/bold]  [dim]{food['source_name']}  ({grams:g} g)[/dim]"
+    )
+
+    nutrients = get_nutrients(conn, matches[0].id)
+    render_label(_console, food, nutrients, portions, per_grams=grams, lang=lang)
+
+
+@cli.group()
+def recipe():
+    """Recipe evaluation tools."""
+
+
+@recipe.command("eval")
+@click.argument("file", type=click.File("r"), default="-")
+@click.option("--db", default=None, metavar="PATH", help="Database path (default: ./work/ew.db)")
+@click.option("--servings", default=None, type=click.IntRange(min=1), metavar="N", help="Show a per-serving column")
+@click.option("--lang", default="en", type=click.Choice(["en", "fr"]), show_default=True, help="Search and display language")
+def recipe_eval(file, db, servings, lang):
+    """Evaluate the nutrition of a recipe from an ingredient list.
+
+    FILE is a text file with one ingredient per line (amount unit food).
+    Use - to read from stdin. Lines starting with # and blank lines are ignored.
+
+    \b
+    Example file:
+        1 cup whole milk
+        2 large eggs
+        1/2 cup rolled oats
+        # optional notes are ignored
+    """
+    from .lookup import search, get_food, get_nutrients, get_portions
+    from .parser import parse_ingredient, resolve_grams
+    from .recipe import MatchResult, SkipResult, aggregate
+    from rich.table import Table
+
+    db_p = _db_path(db)
+    if not db_p.exists():
+        _console.print(
+            f"[red]Database not found at {db_p}. Run 'ew import' first.[/red]",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    conn = connect(db_p)
+
+    # --- Parse and match each line ---
+    results: list[MatchResult | SkipResult] = []
+    for raw_line in file:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        parsed = parse_ingredient(line)
+        if parsed is None:
+            results.append(SkipResult(line, "no quantity found"))
+            continue
+
+        top = search(conn, parsed.food_query, lang=lang, limit=1)
+        if not top:
+            results.append(SkipResult(line, "no food match"))
+            continue
+
+        food = get_food(conn, top[0].id)
+        portions = get_portions(conn, top[0].id)
+        grams, warning = resolve_grams(parsed.amount, parsed.unit, portions)
+        nutrients = get_nutrients(conn, top[0].id, grams)
+        results.append(MatchResult(
+            raw=line,
+            food_id=top[0].id,
+            food_name=food["name_en"],
+            source_name=food["source_name"],
+            grams=grams,
+            unit_warning=warning,
+            nutrients=nutrients,
+        ))
+
+    if not results:
+        _console.print("[dim]No ingredient lines found.[/dim]")
+        return
+
+    # --- Ingredient table ---
+    _console.print()
+    tbl = Table(box=None, show_header=False, padding=(0, 1), show_edge=False)
+    tbl.add_column("icon",  no_wrap=True, width=2)
+    tbl.add_column("input", no_wrap=True)
+    tbl.add_column("arrow", no_wrap=True, style="dim")
+    tbl.add_column("match", style="bold")
+    tbl.add_column("grams", justify="right", style="green")
+    tbl.add_column("note",  style="yellow dim")
+
+    for r in results:
+        if isinstance(r, MatchResult):
+            icon = "[green]✓[/green]" if not r.unit_warning else "[yellow]⚠[/yellow]"
+            tbl.add_row(
+                icon,
+                r.raw,
+                "→",
+                r.food_name,
+                f"{r.grams:g} g",
+                r.unit_warning or "",
+            )
+        else:
+            tbl.add_row("[red]✗[/red]", r.raw, "", f"[dim]{r.reason}[/dim]", "", "")
+
+    _console.print(tbl)
+
+    # --- Aggregate ---
+    matched = [r for r in results if isinstance(r, MatchResult)]
+    if not matched:
+        _console.print("\n[red]No ingredients matched.[/red]")
+        return
+
+    totals = aggregate([r.nutrients for r in matched])
+
+    # --- Totals table ---
+    _console.print()
+    n_matched = len(matched)
+    n_total = len(results)
+    label = f"{n_matched} of {n_total} ingredient{'s' if n_total != 1 else ''} matched"
+    _console.rule(f"[dim]{label}[/dim]", style="bright_black")
+    _console.print()
+
+    from .lookup import SECTIONS, fmt_value
+
+    ttbl = Table(box=None, show_header=True, padding=(0, 2), show_edge=False)
+    ttbl.add_column("", no_wrap=True, min_width=30)
+    ttbl.add_column("Total", justify="right", style="green")
+    has_servings = servings is not None
+    if has_servings:
+        ttbl.add_column(f"Per serving (÷{servings})", justify="right", style="cyan")
+
+    # Bucket rows into sections
+    buckets: dict[str, list] = {name: [] for name, *_ in SECTIONS}
+    buckets["Other"] = []
+    for row in totals:
+        rank = row["rank"]
+        placed = False
+        for sname, lo, hi in SECTIONS:
+            if lo <= rank <= hi:
+                buckets[sname].append(row)
+                placed = True
+                break
+        if not placed:
+            buckets["Other"].append(row)
+
+    def _trow(name: str, v1: str, v2: str) -> None:
+        if has_servings:
+            ttbl.add_row(name, v1, v2)
+        else:
+            ttbl.add_row(name, v1)
+
+    first_section = True
+    for sname, *_ in SECTIONS:
+        rows = buckets[sname]
+        if not rows:
+            continue
+        if not first_section:
+            _trow("", "", "")
+        first_section = False
+        _trow(f"[bold]{sname}[/bold]", "", "")
+        for n in rows:
+            val = fmt_value(n["value"], n["unit"])
+            per_srv = fmt_value(n["value"] / servings, n["unit"]) if has_servings else ""
+            _trow(f"  {n['name_en']}", val, per_srv)
+
+    _console.print(ttbl)
+    _console.print()
+
+
+@cli.command()
 @click.option("--db", default=None, metavar="PATH", help="Database path (default: ./work/ew.db)")
 def sources(db):
     """List loaded data sources and food counts."""

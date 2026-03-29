@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.7 — 2026-03-28
+
+- Added `ew match INGREDIENT` command (P2 complete)
+- Added `ew recipe eval FILE` command with `--servings N` flag
+- New `ew/parser.py`: ingredient string parsing (integers, decimals, fractions, compact `100g` form) and unit-to-gram resolution (direct metric + food_portion fuzzy match + 1 g fallback)
+- New `ew/recipe.py`: `MatchResult`/`SkipResult` dataclasses and `aggregate()` for summing nutrients across ingredients
+- `SECTIONS` and `fmt_value` in `lookup.py` made public for reuse in recipe rendering
+- 30 new tests in `tests/test_parser.py` and `tests/test_recipe.py` (74 total)
+- P2 marked done in PLAN.md and README
+
+## 0.1.6 — 2026-03-28
+
+- Added annotated example output to the README lookup section (dark chocolate, 70-85% cacao)
+
 ## 0.1.5 — 2026-03-28
 
 - Rewrote README to focus on setup and usage; removed phases and aspirational features list

@@ -12,7 +12,7 @@ from rich.table import Table
 
 
 # Rank boundaries that define label sections (matches NUTRIENT_RANK in db.py).
-_SECTIONS = [
+SECTIONS = [
     ("Energy",   0,    99),
     ("Macros",  100,   399),
     ("Minerals", 400,  499),
@@ -184,13 +184,13 @@ def _populate_table(
     has_col2: bool,
 ) -> None:
     """Bucket nutrients into sections and add rows with section headers."""
-    buckets: dict[str, list] = {name: [] for name, *_ in _SECTIONS}
+    buckets: dict[str, list] = {name: [] for name, *_ in SECTIONS}
     buckets["Other"] = []
 
     for row in nutrients:
         rank = row["rank"]
         placed = False
-        for section_name, lo, hi in _SECTIONS:
+        for section_name, lo, hi in SECTIONS:
             if lo <= rank <= hi:
                 buckets[section_name].append(row)
                 placed = True
@@ -198,7 +198,7 @@ def _populate_table(
         if not placed:
             buckets["Other"].append(row)
 
-    section_order = [name for name, *_ in _SECTIONS] + ["Other"]
+    section_order = [name for name, *_ in SECTIONS] + ["Other"]
     first_section = True
     for section_name in section_order:
         rows = buckets[section_name]
@@ -210,8 +210,8 @@ def _populate_table(
         _add_row(tbl, f"[bold]{section_name}[/bold]", "", "", has_col2)
         for n in rows:
             name = n["name_fr"] if lang == "fr" and n["name_fr"] else n["name_en"]
-            val_100 = _fmt(n["value"], n["unit"])
-            val_2 = _fmt(n["value"] * col2_grams / 100.0, n["unit"]) if col2_grams else ""
+            val_100 = fmt_value(n["value"], n["unit"])
+            val_2 = fmt_value(n["value"] * col2_grams / 100.0, n["unit"]) if col2_grams else ""
             _add_row(tbl, f"  {name}", val_100, val_2, has_col2)
 
 
@@ -222,7 +222,7 @@ def _add_row(tbl: Table, name: str, val_100: str, val_2: str, has_col2: bool) ->
         tbl.add_row(name, val_100)
 
 
-def _fmt(value: float, unit: str) -> str:
+def fmt_value(value: float, unit: str) -> str:
     """Format a nutrient value with its unit."""
     if value >= 1000:
         return f"{value:,.0f} {unit}"
