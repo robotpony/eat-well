@@ -1,0 +1,31 @@
+__pycache__/
+**/__pycache__/
+.DS_Store
+*.pyc
+*.pyo
+*.pyd
+
+# Generated database
+ew.db
+
+# Import data (large, not checked in)
+import/usa/
+import/cad/
+
+# Python packaging / build artifacts
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Test cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
