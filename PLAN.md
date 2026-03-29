@@ -64,7 +64,7 @@ Run: `pytest tests/`
 
 ---
 
-## P1: CLI lookup tool
+## ~~P1: CLI lookup tool~~ ✓
 
 Goal: `ew lookup "raw almonds"` returns a readable nutrition label.
 

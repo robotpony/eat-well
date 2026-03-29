@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.4 — 2026-03-28
+
+- Added `ew lookup QUERY` command (P1 complete)
+- FTS5 BM25 search with column-filtered, safely tokenised queries
+- Two-column nutrition label (per 100 g + per first portion) grouped into Energy / Macros / Minerals / Vitamins sections
+- `--pick N` to auto-select a result without prompting
+- `--per GRAMS` to override the second column scale
+- `--lang fr` for French search and display (CNF foods only)
+- 18 new tests in `tests/test_lookup.py` (44 total)
+- P1 marked done in PLAN.md and README
+
 ## 0.1.3 — 2026-03-28
 
 - Rewrote `ew import` output using rich: section rules, coloured counts, named sources, and a summary footer

@@ -105,6 +105,67 @@ def import_cmd(db, import_dir):
 
 
 @cli.command()
+@click.argument("query")
+@click.option("--db", default=None, metavar="PATH", help="Database path (default: ./work/ew.db)")
+@click.option("--pick", "pick_n", default=None, type=int, metavar="N", help="Auto-select match N without prompting")
+@click.option("--per", "per_grams", default=None, type=float, metavar="GRAMS", help="Second column: per N grams (default: first portion)")
+@click.option("--lang", default="en", type=click.Choice(["en", "fr"]), show_default=True, help="Search and display language")
+def lookup(query, db, pick_n, per_grams, lang):
+    """Look up nutrition information for a food.
+
+    QUERY is a plain-text search string, e.g. \"raw almonds\" or \"whole milk\".
+    """
+    from .lookup import search, get_food, get_nutrients, get_portions, render_label
+
+    if per_grams is not None and per_grams <= 0:
+        _console.print("[red]--per must be a positive number of grams.[/red]", err=True)
+        raise SystemExit(1)
+
+    db_p = _db_path(db)
+    if not db_p.exists():
+        _console.print(
+            f"[red]Database not found at {db_p}. Run 'ew import' first.[/red]",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    conn = connect(db_p)
+    matches = search(conn, query, lang=lang)
+
+    if not matches:
+        _console.print(f"[red]No matches found for:[/red] {query}")
+        raise SystemExit(1)
+
+    # Resolve which match to display
+    if pick_n is not None:
+        if not (1 <= pick_n <= len(matches)):
+            _console.print(
+                f"[red]--pick {pick_n} is out of range (1–{len(matches)}).[/red]",
+                err=True,
+            )
+            raise SystemExit(1)
+        food_id = matches[pick_n - 1].id
+    elif len(matches) == 1:
+        food_id = matches[0].id
+    else:
+        _console.print()
+        for i, m in enumerate(matches, 1):
+            _console.print(f"  [bold]{i}[/bold]  {m.name}  [dim]{m.source_name}[/dim]")
+        _console.print()
+        choice = click.prompt("Pick", type=click.IntRange(1, len(matches)))
+        food_id = matches[choice - 1].id
+
+    food = get_food(conn, food_id)
+    if food is None:
+        _console.print("[red]Food not found.[/red]", err=True)
+        raise SystemExit(1)
+
+    nutrients = get_nutrients(conn, food_id)
+    portions = get_portions(conn, food_id)
+    render_label(_console, food, nutrients, portions, per_grams, lang)
+
+
+@cli.command()
 @click.option("--db", default=None, metavar="PATH", help="Database path (default: ./work/ew.db)")
 def sources(db):
     """List loaded data sources and food counts."""

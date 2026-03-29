@@ -19,7 +19,7 @@ A tool for learning about food and planning what to eat.
 | Phase | Description | Status |
 |---|---|---|
 | P0 | Data import and schema | ✓ Done |
-| P1 | CLI lookup tool (`ew lookup`) | Planned |
+| P1 | CLI lookup tool (`ew lookup`) | ✓ Done |
 | P2 | Query tools (`ew match`, `ew recipe eval`) | Planned |
 | P3 | Markdown output | Planned |
 
@@ -80,12 +80,26 @@ EW_DB=/path/to/nutrition.db EW_IMPORT_DIR=/path/to/data ew import
 
 The database is written to `work/ew.db` by default. The `work/` directory is created automatically and is git-ignored.
 
+## Lookup
+
+```bash
+ew lookup "raw almonds"
+```
+
+Shows the top matches. If there is more than one, you will be prompted to pick. Displays a two-column nutrition label: per 100 g and per the first listed portion.
+
+```bash
+ew lookup "whole milk" --per 250   # second column: per 250 g
+ew lookup "lait entier" --lang fr  # search and display in French
+ew lookup "almonds" --pick 2       # auto-select match 2
+```
+
 ## Development
 
 ```bash
 pytest tests/
 ```
 
-26 tests covering schema creation, CNF and USDA import, nutrient deduplication, portion calculations, and FTS indexing. No large data files required — tests use small in-memory fixtures.
+44 tests covering schema creation, CNF and USDA import, nutrient deduplication, portion calculations, FTS indexing, and lookup/label rendering. No large data files required — tests use small in-memory fixtures.
 
 See `ARCHITECTURE.md` for the database schema and import pipeline design, and `PLAN.md` for the phased roadmap.
