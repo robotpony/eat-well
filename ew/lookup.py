@@ -38,9 +38,16 @@ def search(
 
     Searches the name_en column by default; name_fr when lang='fr'.
     Returns up to *limit* matches ordered best-first.
+
+    Fetches a wider candidate set from FTS and applies a lightweight
+    re-ranking pass that prefers food names starting with a query term
+    (e.g. "Avocado, raw" over "Oil, avocado" for the query "avocado").
+    BM25 order is preserved as a stable tiebreaker within each group.
     """
     col = "name_fr" if lang == "fr" else "name_en"
     fts_query = _build_fts_query(query, col)
+    # Fetch a wider candidate pool so re-ranking has something to work with.
+    fetch_limit = max(limit * 4, 20)
     try:
         rows = conn.execute(
             f"""
@@ -55,14 +62,15 @@ def search(
             ORDER BY bm25(food_fts)
             LIMIT ?
             """,
-            (fts_query, limit),
+            (fts_query, fetch_limit),
         ).fetchall()
     except sqlite3.OperationalError:
         return []
-    return [
+    matches = [
         FoodMatch(r["id"], r["name"] or "", r["source_name"], r["source_code"])
         for r in rows
     ]
+    return _rerank(matches, query)[:limit]
 
 
 def get_food(conn: sqlite3.Connection, food_id: int) -> Optional[sqlite3.Row]:
@@ -235,6 +243,25 @@ def fmt_value(value: float, unit: str) -> str:
     if value >= 0.01:
         return f"{value:.3f} {unit}"
     return f"{value:.4f} {unit}"
+
+
+def _rerank(matches: list[FoodMatch], query: str) -> list[FoodMatch]:
+    """Stable-sort FTS candidates to prefer names that lead with a query term.
+
+    BM25 sometimes promotes long compound names (e.g. "Oil, avocado") above
+    shorter, more direct matches (e.g. "Avocado, raw") because term frequency
+    in a longer document inflates the score.  Grouping by whether the food's
+    first name component appears in the query, then preserving BM25 order
+    within each group, corrects the most common cases without introducing
+    new errors for multi-word queries.
+    """
+    query_words = set(re.findall(r"\w+", query.lower()))
+
+    def _key(m: FoodMatch) -> int:
+        first = (re.findall(r"\w+", m.name.lower()) or [""])[0]
+        return 0 if first in query_words else 1   # 0 = first-word match (preferred)
+
+    return sorted(matches, key=_key)  # Python sort is stable
 
 
 def _build_fts_query(query: str, col: str) -> str:

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.13 — 2026-03-29
+
+- Fixed FTS re-ranking bias toward long compound food names (quality item 4)
+  - `search()` now fetches a wider candidate pool (4× limit, min 20) and stable-sorts by whether the food name's first component matches a query word — corrects "Oil, avocado" → "Avocado, raw", "Bread, onion" → "Onion, raw", "Tea, ginger" → "Ginger root, raw"
+  - BM25 order preserved as tiebreaker within each group; no regressions for multi-word queries
+- Added built-in gram estimates for common piece-count units (quality item 5)
+  - `_PIECE_GRAM_ESTIMATES` in `parser.py`: cloves (6g), heads (50g), sprigs (2g), bunches (25g), stalks (40g), ears (150g), strips (15g), leaves (1g)
+  - Used as a fallback between food_portion lookup and the 1g last resort; reports "estimated N g each" warning
+  - `4 cloves of garlic` now resolves to 24g instead of 4g
+- 13 new tests (151 total): 7 in `test_parser.py`, 6 in `test_lookup.py`
+- Items 4 and 5 marked done in PLAN.md
+
 ## 0.1.12 — 2026-03-29
 
 - Fixed recipe eval table layout: ingredient and match columns now have bounded widths with ellipsis overflow; notes no longer wrap across multiple rows

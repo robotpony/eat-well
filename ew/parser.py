@@ -129,6 +129,28 @@ _NOTE_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# Estimated gram weights for common piece-count units used as a last resort
+# before the 1 g fallback.  Only covers units where a typical weight is
+# well-established and unlikely to vary enough to mislead the totals.
+_PIECE_GRAM_ESTIMATES: dict[str, float] = {
+    "clove":    6.0,    # garlic clove
+    "cloves":   6.0,
+    "head":    50.0,    # head of garlic (smaller than a cabbage head, etc.)
+    "heads":   50.0,
+    "sprig":    2.0,    # fresh herb sprig
+    "sprigs":   2.0,
+    "bunch":   25.0,    # small bunch of fresh herbs
+    "bunches": 25.0,
+    "stalk":   40.0,    # celery stalk
+    "stalks":  40.0,
+    "ear":    150.0,    # ear of corn
+    "ears":   150.0,
+    "strip":   15.0,    # bacon strip
+    "strips":  15.0,
+    "leaf":     1.0,    # bay leaf, kaffir lime leaf, etc.
+    "leaves":   1.0,
+}
+
 # Leading preparation adjectives that describe how an ingredient is prepared
 # rather than what it is.  Stripped from the start of food_query before FTS.
 #
@@ -245,6 +267,12 @@ def resolve_grams(
     best = _best_portion_match(unit_key, portions)
     if best:
         return amount * best["gram_weight"], None
+
+    # Built-in estimate for common piece-count units
+    for key in (unit_key, unit_key.rstrip("s")):
+        if key in _PIECE_GRAM_ESTIMATES:
+            est = _PIECE_GRAM_ESTIMATES[key]
+            return amount * est, f"no portion in DB for '{unit}', estimated {est:g} g each"
 
     return amount * 1.0, f"no portion found for '{unit}', used 1 g"
 

@@ -333,3 +333,42 @@ def test_no_unit_no_portions_fallback():
     grams, warning = resolve_grams(3.0, None, [])
     assert grams == 3.0
     assert warning is not None
+
+
+# ---------------------------------------------------------------------------
+# resolve_grams — piece-unit gram estimates
+# ---------------------------------------------------------------------------
+
+def test_cloves_estimate():
+    grams, warning = resolve_grams(4.0, "cloves", [])
+    assert grams == 24.0          # 4 × 6 g
+    assert warning is not None    # estimate warning, not None
+    assert "estimated" in warning
+
+
+def test_clove_singular_estimate():
+    grams, warning = resolve_grams(1.0, "clove", [])
+    assert grams == 6.0
+
+
+def test_sprig_estimate():
+    grams, warning = resolve_grams(3.0, "sprigs", [])
+    assert grams == 6.0           # 3 × 2 g
+
+
+def test_stalk_estimate():
+    grams, warning = resolve_grams(2.0, "stalks", [])
+    assert grams == 80.0          # 2 × 40 g
+
+
+def test_piece_estimate_after_portion_miss():
+    # DB portion present but doesn't match the unit — should fall through to estimate
+    portions = [_FakePortion("1 cup", 240.0)]
+    grams, warning = resolve_grams(3.0, "cloves", portions)
+    assert grams == 18.0          # 3 × 6 g
+
+
+def test_unknown_unit_still_falls_back_to_1g():
+    grams, warning = resolve_grams(2.0, "pinch", [])
+    assert grams == 2.0
+    assert "1 g" in warning

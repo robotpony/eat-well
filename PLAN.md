@@ -26,18 +26,26 @@ removes the `/`, FTS searches `"lemon" AND "lime" AND "juice"` — no single foo
 has all three → no match. Should strip `/alternative` (no surrounding spaces)
 leaving `lemon juice`.
 
-### 4. Wrong top FTS match for short queries
+### 4. Wrong top FTS match for short queries *(done)*
 
 `avocado` → "Oil, avocado"; `onion` → "Bread, onion". BM25 ranks long compound
 names above short exact matches. A post-FTS re-ranking step penalising food
 names much longer than the query would fix both cases.
 
-### 5. Piece-unit 1g fallback underestimates common ingredients
+Fixed by fetching a wider FTS candidate pool (4× limit, min 20) and stable-sorting
+by whether the food name's first component matches a query word. BM25 order is
+preserved as a tiebreaker within each group.
+
+### 5. Piece-unit 1g fallback underestimates common ingredients *(done)*
 
 `1 shallot` and `4 cloves garlic` fall back to 1g/item because the DB has no
 portion data for them. A built-in weight table (shallot ≈ 30g, garlic clove ≈
 6g, egg ≈ 50g, etc.) as a second fallback before the 1g last resort would
 significantly improve totals accuracy.
+
+Fixed by adding `_PIECE_GRAM_ESTIMATES` in `parser.py` covering cloves, heads,
+sprigs, bunches, stalks, ears, strips, and leaves. Used as a fallback after the
+food_portion lookup fails, with an "estimated N g each" warning.
 
 ### 6. Amount buried in parentheses
 

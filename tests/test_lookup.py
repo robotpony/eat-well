@@ -7,6 +7,7 @@ from ew.db import rebuild_fts
 from ew.importers.cnf import CnfImporter
 from ew.lookup import (
     FoodMatch,
+    _rerank,
     get_food,
     get_nutrients,
     get_portions,
@@ -166,6 +167,56 @@ def test_render_label_no_portions(loaded_db):
     console = Console(force_terminal=False)
     # No portions: only one column shown, should not raise
     render_label(console, food, nutrients, portions=[])
+
+
+# ---------------------------------------------------------------------------
+# _rerank
+# ---------------------------------------------------------------------------
+
+def _fm(name: str) -> FoodMatch:
+    return FoodMatch(id=0, name=name, source_name="Test", source_code="test")
+
+
+def test_rerank_prefers_first_word_match():
+    # "avocado" query: "Avocado, raw" should rank above "Oil, avocado"
+    candidates = [_fm("Oil, avocado"), _fm("Avocado, raw")]
+    result = _rerank(candidates, "avocado")
+    assert result[0].name == "Avocado, raw"
+
+
+def test_rerank_prefers_first_word_match_onion():
+    # "Onion powder" starts with "onion" (exact query word) → rises to top
+    # "Bread, onion" starts with "bread" → relegated
+    # "Onions, raw" starts with "onions" (plural, not exact match) → stays in BM25 order
+    candidates = [_fm("Bread, onion"), _fm("Onion powder")]
+    result = _rerank(candidates, "onion")
+    assert result[0].name == "Onion powder"
+    assert result[1].name == "Bread, onion"
+
+
+def test_rerank_preserves_bm25_order_within_group():
+    # Both start with a query word — original order (BM25) should be preserved
+    candidates = [_fm("Avocado, raw"), _fm("Avocados, all varieties")]
+    result = _rerank(candidates, "avocado")
+    assert result[0].name == "Avocado, raw"
+    assert result[1].name == "Avocados, all varieties"
+
+
+def test_rerank_multi_word_query():
+    # "whole milk": "Milk, whole" starts with "milk" (in query) → preferred
+    candidates = [_fm("Buttermilk, whole"), _fm("Milk, whole"), _fm("Milk, reduced fat")]
+    result = _rerank(candidates, "whole milk")
+    assert result[0].name in ("Milk, whole", "Milk, reduced fat")
+    assert result[-1].name == "Buttermilk, whole"
+
+
+def test_rerank_empty_is_safe():
+    assert _rerank([], "avocado") == []
+
+
+def test_rerank_single_item_unchanged():
+    m = [_fm("Avocado, raw")]
+    assert _rerank(m, "avocado") == m
 
 
 def test_render_label_french(loaded_db):
