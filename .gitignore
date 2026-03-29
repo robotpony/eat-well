@@ -5,8 +5,8 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Generated database
-ew.db
+# Working directory (generated DB, etc.)
+work/
 
 # Import data (large, not checked in)
 import/usa/

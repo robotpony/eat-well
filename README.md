@@ -64,7 +64,7 @@ The importer reads the SR Legacy and Survey datasets directly from their zip fil
 ew import
 ```
 
-Reads all available sources from `import/` and writes `ew.db`. Any source whose directory or zip isn't found is skipped with a notice. Safe to re-run.
+Reads all available sources from `import/` and writes `work/ew.db`. Any source whose directory or zip isn't found is skipped with a notice. Safe to re-run.
 
 ```bash
 ew sources          # list loaded sources and food counts
@@ -76,6 +76,8 @@ Override default paths:
 ```bash
 EW_DB=/path/to/nutrition.db EW_IMPORT_DIR=/path/to/data ew import
 ```
+
+The database is written to `work/ew.db` by default. The `work/` directory is created automatically and is git-ignored.
 
 ## Development
 

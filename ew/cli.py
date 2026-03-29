@@ -4,13 +4,16 @@ import os
 from pathlib import Path
 
 import click
+from rich.console import Console
+from rich.rule import Rule
 
 from .db import connect, create_schema, rebuild_fts
-from .importers.cnf import CnfImporter
+from .importers.cnf import CnfImporter, SOURCE_NAME as _CNF_NAME
 from .importers.usda import UsaImporter
 
-_DEFAULT_DB = Path("ew.db")
+_DEFAULT_DB = Path("work/ew.db")
 _DEFAULT_IMPORT_DIR = Path("import")
+_console = Console()
 
 
 def _db_path(override: str | None) -> Path:
@@ -27,7 +30,7 @@ def cli():
 
 
 @cli.command("import")
-@click.option("--db", default=None, metavar="PATH", help="Database path (default: ./ew.db)")
+@click.option("--db", default=None, metavar="PATH", help="Database path (default: ./work/ew.db)")
 @click.option("--import-dir", default=None, metavar="DIR", help="Import data root (default: ./import)")
 def import_cmd(db, import_dir):
     """Import nutrition data from raw CSV files into the database.
@@ -38,6 +41,7 @@ def import_cmd(db, import_dir):
     db_p = _db_path(db)
     idir = _import_dir(import_dir)
 
+    db_p.parent.mkdir(parents=True, exist_ok=True)
     conn = connect(db_p)
     create_schema(conn)
 
@@ -62,32 +66,46 @@ def import_cmd(db, import_dir):
         ),
     ]
 
+    _console.print()
+    _console.rule("[bold]ew import[/bold]", style="bright_black")
+    _console.print()
+
     cnf_dir = idir / "cad" / "cnf-fcen-csv"
     if cnf_dir.exists():
-        click.echo("Importing CNF…")
+        _console.print(f"[bold]{_CNF_NAME}[/bold]")
         counts = CnfImporter(conn).run(cnf_dir)
-        _print_counts("cnf", counts)
+        _print_source(counts)
     else:
-        click.echo(f"Skipping CNF (not found: {cnf_dir})")
+        _console.print(f"[dim]{_CNF_NAME}  —  not found, skipped[/dim]")
 
-    for path, code, name, version in _USDA_SOURCES:
+    for path, _code, name, _version in _USDA_SOURCES:
+        _console.print()
         if path.exists():
-            click.echo(f"Importing {code}…")
-            counts = UsaImporter(conn).run(path, code, name, version)
-            _print_counts(code, counts)
+            _console.print(f"[bold]{name}[/bold]")
+            counts = UsaImporter(conn).run(path, _code, name, _version)
+            _print_source(counts)
         else:
-            click.echo(f"Skipping {code} (not found: {path})")
+            _console.print(f"[dim]{name}  —  not found, skipped[/dim]")
 
-    click.echo("Rebuilding full-text search index…")
+    _console.print()
+    _console.print("[dim]Rebuilding search index…[/dim]", end=" ")
     rebuild_fts(conn)
     conn.commit()
+    _console.print("[green]✓[/green]")
 
     total = conn.execute("SELECT COUNT(*) FROM food").fetchone()[0]
-    click.echo(f"Done. {total:,} foods indexed in {db_p}.")
+    _console.print()
+    _console.rule(style="bright_black")
+    _console.print(
+        f"  [bold green]{total:,}[/bold green] foods indexed"
+        f"  [dim]→[/dim]  [cyan]{db_p}[/cyan]"
+    )
+    _console.rule(style="bright_black")
+    _console.print()
 
 
 @cli.command()
-@click.option("--db", default=None, metavar="PATH", help="Database path (default: ./ew.db)")
+@click.option("--db", default=None, metavar="PATH", help="Database path (default: ./work/ew.db)")
 def sources(db):
     """List loaded data sources and food counts."""
     db_p = _db_path(db)
@@ -106,25 +124,24 @@ def sources(db):
         click.echo("No sources loaded.")
         return
 
-    try:
-        from rich.table import Table
-        from rich.console import Console
+    from rich.table import Table
 
-        table = Table(title="Data Sources", show_lines=False)
-        table.add_column("Code", style="bold")
-        table.add_column("Name")
-        table.add_column("Version")
-        table.add_column("Foods", justify="right")
-        for row in rows:
-            table.add_row(row["code"], row["name"], row["version"] or "—", f"{row['foods']:,}")
-        Console().print(table)
-    except ImportError:
-        # Fallback if rich not installed
-        click.echo(f"{'Code':<20} {'Version':<12} {'Foods':>8}  Name")
-        for row in rows:
-            click.echo(f"{row['code']:<20} {row['version'] or '—':<12} {row['foods']:>8}  {row['name']}")
+    table = Table(title="Data Sources", show_lines=False)
+    table.add_column("Code", style="bold")
+    table.add_column("Name")
+    table.add_column("Version")
+    table.add_column("Foods", justify="right")
+    for row in rows:
+        table.add_row(row["code"], row["name"], row["version"] or "—", f"{row['foods']:,}")
+    _console.print(table)
 
 
-def _print_counts(label: str, counts: dict[str, int]) -> None:
-    parts = ", ".join(f"{v:,} {k}" for k, v in counts.items() if v)
-    click.echo(f"  {label}: {parts}")
+def _print_source(counts: dict[str, int]) -> None:
+    labels = [("food", "foods"), ("food_portion", "portions"), ("food_category", "categories")]
+    parts = [
+        f"[green]{counts[key]:,}[/green] {label}"
+        for key, label in labels
+        if counts.get(key)
+    ]
+    if parts:
+        _console.print("  " + "  [dim]·[/dim]  ".join(parts))
