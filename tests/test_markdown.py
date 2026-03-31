@@ -113,53 +113,68 @@ def _make_skip(raw="salt", reason="no quantity found"):
 
 def test_recipe_md_has_ingredient_table():
     results = [_make_match(), _make_skip()]
-    md = render_recipe_md(results, totals=[], servings=None)
+    md = render_recipe_md(results, totals=[])
     assert "Ingredient" in md
     assert "Match" in md
 
 
 def test_recipe_md_matched_row_has_checkmark():
     results = [_make_match()]
-    md = render_recipe_md(results, totals=[], servings=None)
+    md = render_recipe_md(results, totals=[])
     assert "✓" in md
 
 
 def test_recipe_md_skip_row_has_cross():
     results = [_make_skip()]
-    md = render_recipe_md(results, totals=[], servings=None)
+    md = render_recipe_md(results, totals=[])
     assert "✗" in md
 
 
 def test_recipe_md_warning_shows_warning_icon():
     results = [_make_match(warning="no portion found for 'cup'")]
-    md = render_recipe_md(results, totals=[], servings=None)
+    md = render_recipe_md(results, totals=[])
     assert "⚠" in md
 
 
 def test_recipe_md_count_label():
     results = [_make_match(), _make_skip()]
-    md = render_recipe_md(results, totals=[], servings=None)
+    md = render_recipe_md(results, totals=[])
     assert "1 of 2 ingredients matched" in md
 
 
-def test_recipe_md_servings_column():
+def test_recipe_md_per_portion_column_default():
     totals = [{"name_en": "Energy (kcal)", "unit": "kCal", "rank": 0, "value": 400.0}]
     results = [_make_match()]
-    md = render_recipe_md(results, totals=totals, servings=4)
-    assert "Per serving (÷4)" in md
-    assert "4 servings" in md
+    md = render_recipe_md(results, totals=totals)
+    assert "Per 150 g" in md
 
 
-def test_recipe_md_no_servings_column_when_none():
+def test_recipe_md_per_portion_custom_label():
     totals = [{"name_en": "Energy (kcal)", "unit": "kCal", "rank": 0, "value": 400.0}]
     results = [_make_match()]
-    md = render_recipe_md(results, totals=totals, servings=None)
-    assert "Per serving" not in md
+    md = render_recipe_md(results, totals=totals, portion_label="Per serving (÷4, 61 g)", portion_factor=0.25)
+    assert "Per serving (÷4, 61 g)" in md
+
+
+def test_recipe_md_per_portion_value_scaled():
+    # total 400 kcal × factor 0.25 = 100 kcal per portion
+    totals = [{"name_en": "Energy", "unit": "kcal", "rank": 0, "value": 400.0}]
+    results = [_make_match()]
+    md = render_recipe_md(results, totals=totals, portion_label="Per serving", portion_factor=0.25)
+    assert "100 kcal" in md
+
+
+def test_recipe_md_total_column_shows_grams():
+    # _make_match defaults to grams=244.0; header should include that weight
+    totals = [{"name_en": "Energy", "unit": "kcal", "rank": 0, "value": 100.0}]
+    results = [_make_match(grams=244.0)]
+    md = render_recipe_md(results, totals=totals)
+    assert "Total (244 g)" in md
 
 
 def test_recipe_md_totals_section_present():
     totals = [{"name_en": "Protein", "unit": "g", "rank": 100, "value": 12.5}]
     results = [_make_match()]
-    md = render_recipe_md(results, totals=totals, servings=None)
+    md = render_recipe_md(results, totals=totals)
     assert "Totals" in md
     assert "Protein" in md

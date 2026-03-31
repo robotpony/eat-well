@@ -251,15 +251,23 @@ def _rerank(matches: list[FoodMatch], query: str) -> list[FoodMatch]:
     BM25 sometimes promotes long compound names (e.g. "Oil, avocado") above
     shorter, more direct matches (e.g. "Avocado, raw") because term frequency
     in a longer document inflates the score.  Grouping by whether the food's
-    first name component appears in the query, then preserving BM25 order
-    within each group, corrects the most common cases without introducing
-    new errors for multi-word queries.
+    first name component appears in the query (or is a simple plural of a query
+    word), then preserving BM25 order within each group, corrects the most
+    common cases without introducing new errors for multi-word queries.
+
+    Plural handling: "Onions, raw" has first word "onions"; stripping one
+    trailing "s" gives "onion" which matches the query word — so it lands in
+    group 0 alongside "Onion dip, regular", and BM25 order decides between them
+    (favouring the shorter, more relevant document).
     """
     query_words = set(re.findall(r"\w+", query.lower()))
 
     def _key(m: FoodMatch) -> int:
         first = (re.findall(r"\w+", m.name.lower()) or [""])[0]
-        return 0 if first in query_words else 1   # 0 = first-word match (preferred)
+        # Strip one trailing "s" as a minimal plural stem (onions → onion).
+        # Guard len > 3 to avoid mangling short words (e.g. "as", "gas").
+        first_stem = first[:-1] if first.endswith("s") and len(first) > 3 else first
+        return 0 if (first in query_words or first_stem in query_words) else 1
 
     return sorted(matches, key=_key)  # Python sort is stable
 
@@ -267,12 +275,19 @@ def _rerank(matches: list[FoodMatch], query: str) -> list[FoodMatch]:
 def _build_fts_query(query: str, col: str) -> str:
     """Build a column-filtered FTS5 query from a plain-text search string.
 
-    Each whitespace-separated token is quoted as an exact-word match.
+    Each token is emitted as a prefix query (e.g. ``"onion"*``) so that both
+    the singular and plural forms of a food name appear in the candidate pool.
+    Without prefix matching, the exact-token query ``"onion"`` never matches
+    ``"Onions, raw"`` because FTS5 tokenises that document as ``onions``
+    (a different token), so the correct result is invisible to the re-ranker.
+
     Special FTS5 syntax characters are stripped to avoid parse errors.
+    Short tokens (≤ 3 characters) use exact matching to avoid noisy prefix
+    expansions (e.g. ``"of"*`` would match ``offal``, ``official``, etc.).
     """
     clean = re.sub(r'["\(\)\*\^\+\:\,\.\/]', " ", query)
     words = clean.split()
     if not words:
         return query
-    quoted = " ".join(f'"{w}"' for w in words)
+    quoted = " ".join(f'"{w}"*' if len(w) > 3 else f'"{w}"' for w in words)
     return f"{col} : {quoted}"

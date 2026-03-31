@@ -122,17 +122,26 @@ class UsaImporter:
                 (sr_nbr, name_en, unit, rank),
             )
 
-        # Build map: usda nutrient.id (string) → our nutrient.id
-        # We stored usda_id alongside sr_nbr; join via sr_nbr.
+        # Build two lookup maps for food_nutrient.csv → our nutrient.id:
+        #   _nutrient_map:     USDA nutrient.id (e.g. "1002") → our id
+        #   _nutrient_nbr_map: sr_nbr / nutrient_nbr (e.g. "208") → our id
+        #
+        # Foundation and SR Legacy food_nutrient.csv use the USDA id column;
+        # Survey/FNDDS food_nutrient.csv uses nutrient_nbr as the foreign key.
+        # The two ranges never overlap (id ≥ 1000, nutrient_nbr < 1000), so a
+        # single combined map would also work, but keeping them separate is safer.
         sr_to_ours = {
             str(row["sr_nbr"]): row["id"]
             for row in self.conn.execute("SELECT id, sr_nbr FROM nutrient").fetchall()
         }
-        self._nutrient_map = {}
+        self._nutrient_map: dict[str, int] = {}
+        self._nutrient_nbr_map: dict[str, int] = {}
         for sr_nbr, _name, _unit, _rank, usda_id in data:
             ours = sr_to_ours.get(str(sr_nbr))
-            if ours and usda_id:
-                self._nutrient_map[usda_id] = ours
+            if ours:
+                if usda_id:
+                    self._nutrient_map[usda_id] = ours
+                self._nutrient_nbr_map[str(sr_nbr)] = ours
 
         return len(data)
 
@@ -168,7 +177,8 @@ class UsaImporter:
         def generate():
             for row in rows:
                 food_id = self._food_map.get(row.get("fdc_id", "").strip())
-                nutrient_id = self._nutrient_map.get(row.get("nutrient_id", "").strip())
+                nid_key = row.get("nutrient_id", "").strip()
+                nutrient_id = self._nutrient_map.get(nid_key) or self._nutrient_nbr_map.get(nid_key)
                 if food_id is None or nutrient_id is None:
                     continue
                 try:

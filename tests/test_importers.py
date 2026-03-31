@@ -229,3 +229,35 @@ def test_usda_missing_files_returns_zero_counts(db, tmp_path):
     counts = UsaImporter(db).run(empty, "empty", "Empty", "0")
     assert counts["food"] == 0
     assert counts["food_nutrient"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Survey / FNDDS — nutrient_nbr FK scheme (bug fix 0.1.19)
+# ---------------------------------------------------------------------------
+
+
+def test_survey_food_nutrient_uses_nutrient_nbr(db, usda_survey_dir):
+    """Survey food_nutrient.csv uses nutrient_nbr as FK, not nutrient.id.
+
+    Before the fix, _nutrient_map was keyed by USDA id (e.g. "1008") but
+    FNDDS food_nutrient.csv stores the sr_nbr (e.g. "208") in nutrient_id.
+    The lookup always missed, producing 0 nutrient rows for usda_survey foods.
+    """
+    counts = UsaImporter(db).run(usda_survey_dir, "usda_survey", "USDA Survey", "2022")
+    assert counts["food_nutrient"] == 3, f"Expected 3 nutrient rows, got {counts['food_nutrient']}"
+
+
+def test_survey_energy_resolves_correctly(db, usda_survey_dir):
+    """Energy nutrient row for a survey food resolves to the correct kcal value."""
+    UsaImporter(db).run(usda_survey_dir, "usda_survey", "USDA Survey", "2022")
+
+    food_id = db.execute(
+        "SELECT f.id FROM food f JOIN source s ON f.source_id=s.id "
+        "WHERE s.code='usda_survey' AND f.name_en='Beef, ground'"
+    ).fetchone()["id"]
+
+    from ew.lookup import get_nutrients
+    nuts = get_nutrients(db, food_id, 100)
+    energy = next((n for n in nuts if n["name_en"] == "Energy" and n["unit"] == "kcal"), None)
+    assert energy is not None, "Energy (kcal) nutrient not found for survey food"
+    assert abs(energy["value"] - 261.0) < 0.01

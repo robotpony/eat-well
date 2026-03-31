@@ -10,9 +10,10 @@ from typing import Optional
 @dataclass
 class ParsedIngredient:
     amount: float
-    unit: Optional[str]   # None when no unit word was found
-    food_query: str       # the ingredient name to search for
-    raw: str              # original input text
+    unit: Optional[str]          # None when no unit word was found
+    food_query: str              # the ingredient name to search for
+    raw: str                     # original input text
+    note: Optional[str] = None   # parser-level note (e.g. to-taste default)
 
 
 # ---------------------------------------------------------------------------
@@ -189,21 +190,34 @@ _LEADING_ALT_AMOUNT_RE = re.compile(
 # Public API
 # ---------------------------------------------------------------------------
 
-def parse_ingredient(text: str) -> Optional[ParsedIngredient]:
+def parse_ingredient(
+    text: str,
+    aliases: Optional[dict[str, str]] = None,
+    taste_defaults: Optional[list[dict]] = None,
+) -> Optional[ParsedIngredient]:
     """Parse one ingredient line into amount, unit, and food search query.
 
     Returns None for blank lines, comment lines (#…), and lines with no
-    leading number.
+    resolvable quantity.
 
     Handles:
-        "1 cup whole milk"    → (1.0, "cup",   "whole milk")
-        "1/2 cup olive oil"   → (0.5, "cup",   "olive oil")
-        "1 1/2 cups flour"    → (1.5, "cups",  "flour")
-        "100g almonds"        → (100, "g",      "almonds")
-        "2 large eggs"        → (2.0, "large",  "eggs")
-        "3 cloves garlic"     → (3.0, "cloves", "garlic")
-        "salt to taste"       → None
-        "# comment"           → None
+        "1 cup whole milk"           → (1.0, "cup",   "whole milk")
+        "1/2 cup olive oil"          → (0.5, "cup",   "olive oil")
+        "1 1/2 cups flour"           → (1.5, "cups",  "flour")
+        "100g almonds"               → (100, "g",     "almonds")
+        "2 large eggs"               → (2.0, "large", "eggs")
+        "3 cloves garlic"            → (3.0, "cloves","garlic")
+        "garlic powder (½ teaspoon)" → (0.5, "teaspoon","garlic powder")
+        "salt to taste"              → None, unless taste_defaults covers "salt"
+        "# comment"                  → None
+
+    *aliases* maps cleaned query strings to replacement search terms (e.g.
+    "msg" → "monosodium glutamate").  Applied as the final step of
+    _clean_food_query().
+
+    *taste_defaults* is a list of {"key": str, "grams": float} dicts.  When
+    no quantity is found but the cleaned food text matches a key, a
+    ParsedIngredient is returned with the default gram amount and a note.
     """
     raw = text
     text = text.strip()
@@ -218,7 +232,7 @@ def parse_ingredient(text: str) -> Optional[ParsedIngredient]:
     # Compact unit ("100g almonds")
     m = _COMPACT_RE.match(text)
     if m:
-        food_query = _clean_food_query(m.group(3).strip())
+        food_query = _clean_food_query(m.group(3).strip(), aliases)
         if not food_query:
             return None
         return ParsedIngredient(float(m.group(1)), m.group(2).lower(), food_query, raw)
@@ -235,9 +249,22 @@ def parse_ingredient(text: str) -> Optional[ParsedIngredient]:
                 p_amount = _parse_matched_amount(amount_m)
                 unit_raw = (pm.group(3) or "").lower().rstrip(".")
                 p_unit: Optional[str] = unit_raw if (unit_raw in _DIRECT_G or unit_raw in _PORTION_UNITS) else None
-                food_query = _clean_food_query(food_name_raw)
+                food_query = _clean_food_query(food_name_raw, aliases)
                 if food_query:
                     return ParsedIngredient(p_amount, p_unit, food_query, raw)
+
+        # To-taste defaults fallback: "salt, pepper (to taste)" / "thyme (big pinch)"
+        if taste_defaults:
+            food_text = _clean_food_query(text, aliases)
+            if food_text:
+                food_lower = food_text.lower()
+                for td in taste_defaults:
+                    if td["key"] in food_lower:
+                        grams = float(td["grams"])
+                        return ParsedIngredient(
+                            grams, "g", food_text, raw,
+                            note=f"~{grams:g} g (to taste)",
+                        )
         return None
 
     amount = _parse_matched_amount(m)
@@ -256,7 +283,7 @@ def parse_ingredient(text: str) -> Optional[ParsedIngredient]:
         unit = None
         food_query = rest
 
-    food_query = _clean_food_query(food_query.strip())
+    food_query = _clean_food_query(food_query.strip(), aliases)
     if not food_query:
         return None
 
@@ -267,11 +294,23 @@ def resolve_grams(
     amount: float,
     unit: Optional[str],
     portions: list,
+    food_query: str = "",
+    food_weights: Optional[list[dict]] = None,
+    user_cache: Optional[dict] = None,
 ) -> tuple[float, Optional[str]]:
     """Convert an amount + unit into grams.
 
-    Uses direct conversion tables first, then looks up the food_portion
-    table, then falls back to 1 g per unit with a warning.
+    Resolution order (first match wins):
+        1. Direct metric conversion table (g, kg, ml, …)
+        2. food_portion DB lookup
+        3. User portion cache  (P9c)
+        4. Food weight reference table  (P9b — food + unit specific)
+        5. _PIECE_GRAM_ESTIMATES  (unit-only estimates)
+        6. 1 g fallback with warning
+
+    *food_query* is the cleaned ingredient name, used for steps 3 and 4.
+    *food_weights* is the merged food weight reference list from ResolutionContext.
+    *user_cache* maps (food_query, unit) → grams_per_unit from ResolutionContext.
 
     Returns (grams, warning_or_None).
     """
@@ -279,6 +318,16 @@ def resolve_grams(
         piece = _find_piece_portion(portions)
         if piece:
             return amount * piece["gram_weight"], None
+        # User cache (unitless / piece count)
+        if user_cache is not None:
+            cached = user_cache.get((food_query, None))
+            if cached is not None:
+                return amount * cached, None
+        # Food weight reference (unit "each")
+        if food_weights and food_query:
+            gw = _lookup_food_weight(food_query, None, food_weights)
+            if gw is not None:
+                return amount * gw, None
         return amount * 1.0, "no unit given, used 1 g per item"
 
     unit_key = unit.lower()
@@ -293,6 +342,18 @@ def resolve_grams(
     if best:
         return amount * best["gram_weight"], None
 
+    # User cache
+    if user_cache is not None:
+        cached = user_cache.get((food_query, unit_key))
+        if cached is not None:
+            return amount * cached, None
+
+    # Food weight reference
+    if food_weights and food_query:
+        gw = _lookup_food_weight(food_query, unit_key, food_weights)
+        if gw is not None:
+            return amount * gw, None
+
     # Built-in estimate for common piece-count units
     for key in (unit_key, unit_key.rstrip("s")):
         if key in _PIECE_GRAM_ESTIMATES:
@@ -306,7 +367,10 @@ def resolve_grams(
 # Private helpers
 # ---------------------------------------------------------------------------
 
-def _clean_food_query(text: str) -> str:
+def _clean_food_query(
+    text: str,
+    aliases: Optional[dict[str, str]] = None,
+) -> str:
     """Strip noise from a food query so FTS finds clean ingredient names.
 
     Handles (in order):
@@ -318,6 +382,7 @@ def _clean_food_query(text: str) -> str:
         " or alternative"   — listed alternative ("stock or water")
         ", descriptor"      — preparation note after comma ("onion, diced")
         leading prep words  — "sliced mushrooms" → "mushrooms"
+        alias substitution  — "msg" → "monosodium glutamate"  (P9a, exact match)
     """
     # 1. Strip leading alternative amount (/3 lbs, /200g …)
     text = _LEADING_ALT_AMOUNT_RE.sub("", text)
@@ -326,6 +391,11 @@ def _clean_food_query(text: str) -> str:
         text = text[3:]
     # 3. Strip parentheticals and slash/or notes (including inline /alternative)
     text = _NOTE_PATTERNS.sub("", text)
+    # 3b. Re-strip "of " — a leading parenthetical may have hidden it in step 2
+    #     e.g. "(3 lbs) of ground beef" → after step 3: " of ground beef"
+    text = text.strip()
+    if text.lower().startswith("of "):
+        text = text[3:]
     # 4. Strip preparation note after first comma
     if "," in text:
         text = text[: text.index(",")]
@@ -336,7 +406,69 @@ def _clean_food_query(text: str) -> str:
             text = remainder
         else:
             break
-    return text.strip()
+    text = text.strip()
+    # 6. Alias substitution — try the full cleaned query first (exact), then
+    #    fall back to matching any individual word in the query.
+    #    "msg" → "monosodium glutamate"; "Accent MSG" → word "msg" matches.
+    if aliases:
+        sub = aliases.get(text.lower())
+        if sub:
+            text = sub
+        else:
+            for word in text.lower().split():
+                if word in aliases:
+                    text = aliases[word]
+                    break
+    return text
+
+
+def _lookup_food_weight(
+    food_query: str,
+    unit: Optional[str],
+    food_weights: list[dict],
+) -> Optional[float]:
+    """Return grams from the food weight reference table, or None.
+
+    Tries exact food key match first, then a word-prefix match (so entry key
+    "mushroom" matches food_query "mushrooms" and "white mushrooms").
+
+    For unitless lookups (unit=None) the entry's unit must be "each", "piece",
+    or "item".  Otherwise the unit is matched after stripping a trailing "s".
+    """
+    food_lower = food_query.lower().strip()
+    food_words = food_lower.split()
+
+    # Normalise the requested unit for comparison
+    if unit is None:
+        unit_norm = None
+    else:
+        unit_norm = unit.lower().rstrip("s")
+
+    for entry in food_weights:
+        entry_key = entry["key"].lower().strip()
+        entry_unit = entry["unit"].lower().rstrip("s")
+
+        # Unit match
+        if unit_norm is None:
+            unit_ok = entry_unit in ("each", "piece", "item")
+        else:
+            unit_ok = entry_unit == unit_norm
+
+        if not unit_ok:
+            continue
+
+        # Food match: exact, or any word in the food_query starts with the entry key
+        entry_words = entry_key.split()
+        if len(entry_words) == 1:
+            food_ok = any(w.startswith(entry_key) for w in food_words)
+        else:
+            # Multi-word key: require it appears as a substring
+            food_ok = entry_key in food_lower
+
+        if food_ok:
+            return float(entry["grams"])
+
+    return None
 
 
 def _parse_matched_amount(m: re.Match) -> float:

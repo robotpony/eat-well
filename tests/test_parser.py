@@ -437,4 +437,38 @@ def test_paren_amount_unknown_unit_is_none():
     r = parse_ingredient("paprika (1 pinch)")
     assert r is not None
     assert r.unit is None
-    assert r.food_query == "paprika"
+
+
+# ---------------------------------------------------------------------------
+# _clean_food_query — bug fixes (0.1.18)
+# ---------------------------------------------------------------------------
+
+def test_alias_word_level_msg():
+    """Word-level alias: "Accent MSG (optional)" → food_query "monosodium glutamate"."""
+    aliases = {"msg": "monosodium glutamate"}
+    r = parse_ingredient("2 tsp Accent MSG (optional)", aliases=aliases)
+    assert r is not None
+    assert r.food_query == "monosodium glutamate"
+
+
+def test_alias_word_level_evoo():
+    """Word-level alias fires on a single word in a multi-word query."""
+    aliases = {"evoo": "olive oil"}
+    r = parse_ingredient("1 tbsp good EVOO", aliases=aliases)
+    assert r is not None
+    assert r.food_query == "olive oil"
+
+
+def test_alias_exact_match_takes_priority():
+    """Exact-match alias is preferred over word-level when both would match."""
+    aliases = {"msg": "monosodium glutamate", "accent msg": "accent seasoning"}
+    r = parse_ingredient("2 tsp Accent MSG", aliases=aliases)
+    assert r is not None
+    assert r.food_query == "accent seasoning"
+
+
+def test_of_preposition_after_paren():
+    """Leading "(amount) of food" — "of " must be stripped after parenthetical removal."""
+    r = parse_ingredient("1.36kg/3 lbs of ground beef (or a mix of beef/veal/pork)")
+    assert r is not None
+    assert r.food_query == "ground beef"

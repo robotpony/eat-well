@@ -100,3 +100,39 @@ def usda_dir(tmp_path):
         "1001,tablespoon,tbsp\n"
     )
     return d
+
+
+@pytest.fixture
+def usda_survey_dir(tmp_path):
+    """USDA Survey/FNDDS fixture: food_nutrient.csv uses nutrient_nbr as FK, not nutrient.id."""
+    d = tmp_path / "usda_survey"
+    d.mkdir()
+
+    (d / "wweia_food_category.csv").write_text(
+        "wweia_food_category_code,wweia_food_category_description\n"
+        "2002,Beef mixed dishes\n"
+    )
+    # nutrient.csv: id column uses 4-digit USDA IDs, nutrient_nbr is the SR number
+    (d / "nutrient.csv").write_text(
+        "id,name,unit_name,nutrient_nbr,rank\n"
+        "1003,Protein,G,203,600.0\n"
+        "1008,Energy,KCAL,208,300.0\n"
+        "1004,Total lipid (fat),G,204,800.0\n"
+    )
+    (d / "food.csv").write_text(
+        '"fdc_id","data_type","description","food_category_id","publication_date"\n'
+        '"2340760","survey_fndds_food","Beef, ground","2002","2022-10-01"\n'
+    )
+    # food_nutrient.csv: nutrient_id column holds nutrient_nbr values (203, 208…),
+    # NOT the nutrient.id values (1003, 1008…) — this is the FNDDS-specific FK scheme.
+    (d / "food_nutrient.csv").write_text(
+        "id,fdc_id,nutrient_id,amount,data_points,derivation_id,min,max,median,footnote,min_year_acquired\n"
+        "1,2340760,203,26.1,,,,,,,\n"
+        "2,2340760,208,261.0,,,,,,,\n"
+        "3,2340760,204,17.4,,,,,,,\n"
+    )
+    (d / "food_portion.csv").write_text(
+        "id,fdc_id,seq_num,amount,measure_unit_id,portion_description,modifier,gram_weight,data_points,footnote,min_year_acquired\n"
+    )
+    (d / "measure_unit.csv").write_text("id,name,abbreviation\n")
+    return d

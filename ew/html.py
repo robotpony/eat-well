@@ -185,10 +185,15 @@ def render_label_html(
 def render_recipe_html(
     results: list,
     totals: list[dict],
-    servings: Optional[int] = None,
+    portion_label: str = "Per 150 g",
+    portion_factor: float = 0.0,
 ) -> str:
-    """Return a complete HTML document for a recipe evaluation."""
-    has_servings = servings is not None
+    """Return a complete HTML document for a recipe evaluation.
+
+    *portion_label* is the header for the per-portion column.
+    *portion_factor* is portion_grams / total_recipe_grams; multiply total
+    nutrient values by this to get the per-portion value.
+    """
 
     # Ingredient table
     ing_rows: list[str] = [
@@ -239,18 +244,14 @@ def render_recipe_html(
     n_matched = len(matched)
     suffix = "s" if n_total != 1 else ""
     count_label = f"Totals \u2014 {n_matched} of {n_total} ingredient{suffix} matched"
-    if has_servings:
-        count_label += f" \u2014 {servings} servings"
+    total_grams = sum(r.grams for r in matched)
+    total_col_label = f"Total ({total_grams:,.0f} g)"
 
-    # Totals nutrient table
-    col2_label = f"Per serving (\u00f7{servings})" if has_servings else None
-
-    tot_rows: list[str] = [
-        "<table>",
-    ]
-    col2_th = f'<th class="r">{_e(col2_label)}</th>' if has_servings else ""
+    # Totals nutrient table — always two data columns: Total + per-portion
+    tot_rows: list[str] = ["<table>"]
     tot_rows.append(
-        f'<thead><tr><th>Nutrient</th><th class="r">Total</th>{col2_th}</tr></thead>'
+        f'<thead><tr><th>Nutrient</th><th class="r">{_e(total_col_label)}</th>'
+        f'<th class="r">{_e(portion_label)}</th></tr></thead>'
     )
     tot_rows.append("<tbody>")
 
@@ -271,35 +272,29 @@ def render_recipe_html(
         section_rows = buckets[sname]
         if not section_rows:
             continue
-        colspan = 3 if has_servings else 2
         tot_rows.append(
-            f'<tr class="sec"><td colspan="{colspan}"><strong>{_e(sname)}</strong></td></tr>'
+            f'<tr class="sec"><td colspan="3"><strong>{_e(sname)}</strong></td></tr>'
         )
         for n in section_rows:
             val = fmt_value(n["value"], n["unit"])
-            col2_td = ""
-            if has_servings:
-                per_srv = fmt_value(n["value"] / servings, n["unit"])
-                col2_td = f'<td class="r">{_e(per_srv)}</td>'
+            per_portion = fmt_value(n["value"] * portion_factor, n["unit"])
             tot_rows.append(
                 f'<tr class="ind"><td>{_e(n["name_en"])}</td>'
-                f'<td class="r">{_e(val)}</td>{col2_td}</tr>'
+                f'<td class="r">{_e(val)}</td>'
+                f'<td class="r">{_e(per_portion)}</td></tr>'
             )
 
     if buckets["Other"]:
-        colspan = 3 if has_servings else 2
         tot_rows.append(
-            f'<tr class="sec"><td colspan="{colspan}"><strong>Other</strong></td></tr>'
+            '<tr class="sec"><td colspan="3"><strong>Other</strong></td></tr>'
         )
         for n in buckets["Other"]:
             val = fmt_value(n["value"], n["unit"])
-            col2_td = ""
-            if has_servings:
-                per_srv = fmt_value(n["value"] / servings, n["unit"])
-                col2_td = f'<td class="r">{_e(per_srv)}</td>'
+            per_portion = fmt_value(n["value"] * portion_factor, n["unit"])
             tot_rows.append(
                 f'<tr class="ind"><td>{_e(n["name_en"])}</td>'
-                f'<td class="r">{_e(val)}</td>{col2_td}</tr>'
+                f'<td class="r">{_e(val)}</td>'
+                f'<td class="r">{_e(per_portion)}</td></tr>'
             )
 
     tot_rows.extend(["</tbody>", "</table>"])

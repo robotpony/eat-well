@@ -185,13 +185,24 @@ def test_rerank_prefers_first_word_match():
 
 
 def test_rerank_prefers_first_word_match_onion():
-    # "Onion powder" starts with "onion" (exact query word) → rises to top
-    # "Bread, onion" starts with "bread" → relegated
-    # "Onions, raw" starts with "onions" (plural, not exact match) → stays in BM25 order
-    candidates = [_fm("Bread, onion"), _fm("Onion powder")]
+    # "Onions, raw" starts with "onions" — plural stem "onion" matches → group 0
+    # "Onion dip, regular" starts with "onion" — exact match → group 0
+    # Both land in group 0; BM25 order (input order) is preserved within group.
+    # "Bread, onion" starts with "bread" → group 1 (relegated)
+    candidates = [_fm("Bread, onion"), _fm("Onion dip, regular"), _fm("Onions, raw")]
     result = _rerank(candidates, "onion")
-    assert result[0].name == "Onion powder"
-    assert result[1].name == "Bread, onion"
+    # Both onion foods in group 0, bread relegated to group 1
+    names = [r.name for r in result]
+    assert "Bread, onion" == names[-1]
+    assert "Onions, raw" in names[:2]
+    assert "Onion dip, regular" in names[:2]
+
+
+def test_rerank_plural_stem_matches_query():
+    # "mushrooms" (plural) should match query "mushroom" via stem
+    candidates = [_fm("Oil, mushroom"), _fm("Mushrooms, raw")]
+    result = _rerank(candidates, "mushroom")
+    assert result[0].name == "Mushrooms, raw"
 
 
 def test_rerank_preserves_bm25_order_within_group():

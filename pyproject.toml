@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "eat-well"
-version = "0.1.14"
+version = "0.1.21"
 description = "Nutrition and recipe planning tool"
 requires-python = ">=3.11"
 dependencies = [
@@ -22,6 +22,9 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["ew*"]
+
+[tool.setuptools.package-data]
+"ew" = ["data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

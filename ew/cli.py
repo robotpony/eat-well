@@ -20,6 +20,10 @@ def _db_path(override: str | None) -> Path:
     return Path(override) if override else Path(os.environ.get("EW_DB", _DEFAULT_DB))
 
 
+def _work_dir(db_override: str | None) -> Path:
+    return _db_path(db_override).parent
+
+
 def _import_dir(override: str | None) -> Path:
     return Path(override) if override else Path(os.environ.get("EW_IMPORT_DIR", _DEFAULT_IMPORT_DIR))
 
@@ -190,14 +194,6 @@ def match(ingredient, db, lang):
     from .lookup import search, get_food, get_nutrients, get_portions, render_label
     from .parser import parse_ingredient, resolve_grams
 
-    parsed = parse_ingredient(ingredient)
-    if parsed is None:
-        _console.print(
-            "[red]Could not parse ingredient.[/red] "
-            "Include a quantity, e.g. [bold]'1 cup whole milk'[/bold]."
-        )
-        raise SystemExit(1)
-
     db_p = _db_path(db)
     if not db_p.exists():
         _console.print(
@@ -207,6 +203,18 @@ def match(ingredient, db, lang):
         raise SystemExit(1)
 
     conn = connect(db_p)
+
+    from .resolution import load_context
+    ctx = load_context(conn, _work_dir(db))
+
+    parsed = parse_ingredient(ingredient, aliases=ctx.aliases, taste_defaults=ctx.taste_defaults)
+    if parsed is None:
+        _console.print(
+            "[red]Could not parse ingredient.[/red] "
+            "Include a quantity, e.g. [bold]'1 cup whole milk'[/bold]."
+        )
+        raise SystemExit(1)
+
     matches = search(conn, parsed.food_query, lang=lang, limit=1)
     if not matches:
         _console.print(f"[red]No match found for:[/red] {parsed.food_query}")
@@ -214,7 +222,7 @@ def match(ingredient, db, lang):
 
     food = get_food(conn, matches[0].id)
     portions = get_portions(conn, matches[0].id)
-    grams, warning = resolve_grams(parsed.amount, parsed.unit, portions)
+    grams, warning = resolve_grams(parsed.amount, parsed.unit, portions, parsed.food_query, ctx.food_weights, ctx.user_cache)
 
     if warning:
         _console.print(f"[yellow]⚠ {warning}[/yellow]")
@@ -236,11 +244,13 @@ def recipe():
 @recipe.command("eval")
 @click.argument("file", type=click.File("r"), default="-")
 @click.option("--db", default=None, metavar="PATH", help="Database path (default: ./work/ew.db)")
-@click.option("--servings", default=None, type=click.IntRange(min=1), metavar="N", help="Show a per-serving column")
+@click.option("--servings", default=None, type=click.IntRange(min=1), metavar="N", help="Number of servings; sets per-portion column to total weight ÷ N")
+@click.option("--portion", default=None, type=click.FloatRange(min=1), metavar="GRAMS", help="Per-portion gram weight for the second column (default: 150 g)")
 @click.option("--lang", default="en", type=click.Choice(["en", "fr"]), show_default=True, help="Search and display language")
 @click.option("--format", "fmt", default="console", type=click.Choice(["console", "md", "html"]), show_default=True, help="Output format")
 @click.option("--output", "output_file", default=None, metavar="FILE", help="Write output to FILE instead of stdout")
-def recipe_eval(file, db, servings, lang, fmt, output_file):
+@click.option("--interactive", "-i", is_flag=True, default=False, help="Prompt to resolve unmatched items and 1 g fallbacks")
+def recipe_eval(file, db, servings, portion, lang, fmt, output_file, interactive):
     """Evaluate the nutrition of a recipe from an ingredient list.
 
     FILE is a text file with one ingredient per line (amount unit food).
@@ -256,6 +266,7 @@ def recipe_eval(file, db, servings, lang, fmt, output_file):
     from .lookup import search, get_food, get_nutrients, get_portions
     from .parser import parse_ingredient, resolve_grams
     from .recipe import MatchResult, SkipResult, aggregate
+    from .resolution import load_context
     from rich.table import Table
 
     db_p = _db_path(db)
@@ -267,27 +278,37 @@ def recipe_eval(file, db, servings, lang, fmt, output_file):
         raise SystemExit(1)
 
     conn = connect(db_p)
+    ctx = load_context(conn, _work_dir(db))
 
     # --- Parse and match each line ---
     results: list[MatchResult | SkipResult] = []
+    parsed_for: list = []   # parallel: ParsedIngredient or None per result entry
+
     for raw_line in file:
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
 
-        parsed = parse_ingredient(line)
+        parsed = parse_ingredient(line, aliases=ctx.aliases, taste_defaults=ctx.taste_defaults)
         if parsed is None:
             results.append(SkipResult(line, "no quantity found"))
+            parsed_for.append(None)
             continue
 
         top = search(conn, parsed.food_query, lang=lang, limit=1)
         if not top:
             results.append(SkipResult(line, "no food match"))
+            parsed_for.append(parsed)
             continue
 
         food = get_food(conn, top[0].id)
         portions = get_portions(conn, top[0].id)
-        grams, warning = resolve_grams(parsed.amount, parsed.unit, portions)
+        grams, warning = resolve_grams(
+            parsed.amount, parsed.unit, portions,
+            parsed.food_query, ctx.food_weights, ctx.user_cache,
+        )
+        # Prefer parser-level note (e.g. to-taste default) over gram-resolution warning
+        display_warning = parsed.note or warning
         nutrients = get_nutrients(conn, top[0].id, grams)
         results.append(MatchResult(
             raw=line,
@@ -295,24 +316,46 @@ def recipe_eval(file, db, servings, lang, fmt, output_file):
             food_name=food["name_en"],
             source_name=food["source_name"],
             grams=grams,
-            unit_warning=warning,
+            unit_warning=display_warning,
             nutrients=nutrients,
         ))
+        parsed_for.append(parsed)
+
+    # --- Interactive resolution pass (P9c) ---
+    if interactive:
+        _interactive_pass(conn, results, parsed_for, ctx, lang)
 
     if not results:
         _console.print("[dim]No ingredient lines found.[/dim]")
         return
 
+    # --- Aggregate (needed for portion calculation and non-console output) ---
+    matched_all = [r for r in results if isinstance(r, MatchResult)]
+    total_recipe_grams = sum(r.grams for r in matched_all)
+
+    # --- Per-portion column parameters ---
+    # --portion overrides --servings; both override the 150 g default.
+    if portion is not None:
+        portion_grams = float(portion)
+        portion_col_label = f"Per {portion_grams:g} g"
+    elif servings is not None and total_recipe_grams > 0:
+        portion_grams = total_recipe_grams / servings
+        portion_col_label = f"Per serving (÷{servings}, {portion_grams:.0f} g)"
+    else:
+        portion_grams = 150.0
+        portion_col_label = "Per 150 g"
+
+    portion_factor = portion_grams / total_recipe_grams if total_recipe_grams > 0 else 0.0
+
     # --- Non-console output ---
     if fmt in ("md", "html"):
-        matched_nc = [r for r in results if isinstance(r, MatchResult)]
-        totals_nc = aggregate([r.nutrients for r in matched_nc])
+        totals_nc = aggregate([r.nutrients for r in matched_all])
         if fmt == "md":
             from .markdown import render_recipe_md
-            text = render_recipe_md(results, totals_nc, servings)
+            text = render_recipe_md(results, totals_nc, portion_col_label, portion_factor)
         else:
             from .html import render_recipe_html
-            text = render_recipe_html(results, totals_nc, servings)
+            text = render_recipe_html(results, totals_nc, portion_col_label, portion_factor)
         _write_output(text, output_file)
         return
 
@@ -342,8 +385,7 @@ def recipe_eval(file, db, servings, lang, fmt, output_file):
 
     _console.print(tbl)
 
-    # --- Aggregate ---
-    matched = [r for r in results if isinstance(r, MatchResult)]
+    matched = matched_all
     if not matched:
         _console.print("\n[red]No ingredients matched.[/red]")
         return
@@ -362,10 +404,8 @@ def recipe_eval(file, db, servings, lang, fmt, output_file):
 
     ttbl = Table(box=None, show_header=True, padding=(0, 2), show_edge=False)
     ttbl.add_column("", no_wrap=True, min_width=30)
-    ttbl.add_column("Total", justify="right", style="green")
-    has_servings = servings is not None
-    if has_servings:
-        ttbl.add_column(f"Per serving (÷{servings})", justify="right", style="cyan")
+    ttbl.add_column(f"Total ({total_recipe_grams:,.0f} g)", justify="right", style="green")
+    ttbl.add_column(portion_col_label, justify="right", style="cyan")
 
     # Bucket rows into sections
     buckets: dict[str, list] = {name: [] for name, *_ in SECTIONS}
@@ -381,25 +421,19 @@ def recipe_eval(file, db, servings, lang, fmt, output_file):
         if not placed:
             buckets["Other"].append(row)
 
-    def _trow(name: str, v1: str, v2: str) -> None:
-        if has_servings:
-            ttbl.add_row(name, v1, v2)
-        else:
-            ttbl.add_row(name, v1)
-
     first_section = True
     for sname, *_ in SECTIONS:
         rows = buckets[sname]
         if not rows:
             continue
         if not first_section:
-            _trow("", "", "")
+            ttbl.add_row("", "", "")
         first_section = False
-        _trow(f"[bold]{sname}[/bold]", "", "")
+        ttbl.add_row(f"[bold]{sname}[/bold]", "", "")
         for n in rows:
             val = fmt_value(n["value"], n["unit"])
-            per_srv = fmt_value(n["value"] / servings, n["unit"]) if has_servings else ""
-            _trow(f"  {n['name_en']}", val, per_srv)
+            per_portion = fmt_value(n["value"] * portion_factor, n["unit"])
+            ttbl.add_row(f"  {n['name_en']}", val, per_portion)
 
     _console.print(ttbl)
     _console.print()
@@ -436,6 +470,256 @@ def sources(db):
         table.add_row(row["code"], row["name"], row["version"] or "—", f"{row['foods']:,}")
     _console.print(table)
 
+
+# ---------------------------------------------------------------------------
+# Management commands  (P9)
+# ---------------------------------------------------------------------------
+
+@cli.group()
+def alias():
+    """Manage food name aliases (e.g. msg → monosodium glutamate)."""
+
+
+@alias.command("list")
+@click.option("--db", default=None, metavar="PATH")
+def alias_list(db):
+    """Show all aliases: bundled defaults and user-defined overrides."""
+    from .resolution import list_aliases
+    from rich.table import Table
+
+    db_p = _db_path(db)
+    conn = connect(db_p) if db_p.exists() else None
+    if conn is not None:
+        create_schema(conn)
+    bundled, user = list_aliases(conn)
+
+    tbl = Table(box=None, show_header=True, padding=(0, 2), show_edge=False)
+    tbl.add_column("Input", style="bold")
+    tbl.add_column("Replacement")
+    tbl.add_column("Source", style="dim")
+
+    user_keys = {u["input_key"] for u in user}
+    for key, rep in sorted(bundled.items()):
+        if key not in user_keys:
+            tbl.add_row(key, rep, "bundled")
+    for u in user:
+        tbl.add_row(u["input_key"], u["replacement"], "user")
+
+    _console.print(tbl)
+
+
+@alias.command("add")
+@click.argument("key")
+@click.argument("replacement")
+@click.option("--db", default=None, metavar="PATH")
+def alias_add(key, replacement, db):
+    """Add or update a user alias.  KEY is the query text to replace."""
+    from .resolution import save_alias
+    db_p = _db_path(db)
+    db_p.parent.mkdir(parents=True, exist_ok=True)
+    conn = connect(db_p)
+    create_schema(conn)
+    save_alias(conn, key, replacement)
+    _console.print(f"[green]✓[/green]  [bold]{key}[/bold] → {replacement}")
+
+
+# -----------
+
+@cli.group()
+def weights():
+    """Manage the food weight reference table (food + unit → grams)."""
+
+
+@weights.command("list")
+@click.argument("food", default="", required=False)
+@click.option("--db", default=None, metavar="PATH")
+def weights_list(food, db):
+    """Show food weight reference entries.  Filter by FOOD substring if given."""
+    from .resolution import list_food_weights
+    from rich.table import Table
+
+    bundled, user = list_food_weights(_work_dir(db))
+
+    tbl = Table(box=None, show_header=True, padding=(0, 2), show_edge=False)
+    tbl.add_column("Food key", style="bold")
+    tbl.add_column("Unit")
+    tbl.add_column("Grams", justify="right")
+    tbl.add_column("Note", style="dim")
+    tbl.add_column("Source", style="dim")
+
+    user_keys = {(u["key"].lower(), u["unit"].lower()) for u in user}
+
+    def _add(entries, source):
+        for e in entries:
+            if food and food.lower() not in e["key"].lower():
+                continue
+            tbl.add_row(e["key"], e["unit"], str(e["grams"]), e.get("note", ""), source)
+
+    _add([e for e in bundled if (e["key"].lower(), e["unit"].lower()) not in user_keys], "bundled")
+    _add(user, "user")
+    _console.print(tbl)
+
+
+@weights.command("add")
+@click.argument("food_key")
+@click.argument("unit")
+@click.argument("grams", type=float)
+@click.option("--db", default=None, metavar="PATH")
+def weights_add(food_key, unit, grams, db):
+    """Add or update a food weight entry.
+
+    FOOD_KEY is a substring of the food name (e.g. "shallot").
+    UNIT is the portion unit (e.g. "each", "cup", "medium").
+    GRAMS is the gram weight for one unit.
+    """
+    from .resolution import save_food_weight
+    wd = _work_dir(db)
+    wd.mkdir(parents=True, exist_ok=True)
+    save_food_weight(wd, food_key, unit, grams)
+    _console.print(f"[green]✓[/green]  {food_key} × 1 {unit} = {grams:g} g")
+
+
+# -----------
+
+@cli.group()
+def portions():
+    """Manage the interactive portion cache (resolved from recipe eval -i)."""
+
+
+@portions.command("list")
+@click.option("--db", default=None, metavar="PATH")
+def portions_list(db):
+    """Show all cached portion answers."""
+    from .resolution import list_portion_cache
+    from rich.table import Table
+
+    db_p = _db_path(db)
+    if not db_p.exists():
+        _console.print("[dim]No database found — cache is empty.[/dim]")
+        return
+
+    conn = connect(db_p)
+    create_schema(conn)
+    entries = list_portion_cache(conn)
+
+    if not entries:
+        _console.print("[dim]Portion cache is empty.[/dim]")
+        return
+
+    tbl = Table(box=None, show_header=True, padding=(0, 2), show_edge=False)
+    tbl.add_column("Food", style="bold")
+    tbl.add_column("Unit")
+    tbl.add_column("g / unit", justify="right")
+    tbl.add_column("Saved", style="dim")
+    for e in entries:
+        tbl.add_row(e["food_query"], e["unit"] or "each", f"{e['gram_weight']:g}", e["created_at"][:10])
+    _console.print(tbl)
+
+
+@portions.command("clear")
+@click.option("--db", default=None, metavar="PATH")
+@click.confirmation_option(prompt="Clear the entire portion cache?")
+def portions_clear(db):
+    """Delete all entries from the interactive portion cache."""
+    from .resolution import clear_portion_cache
+    db_p = _db_path(db)
+    if not db_p.exists():
+        _console.print("[dim]No database found — nothing to clear.[/dim]")
+        return
+    conn = connect(db_p)
+    create_schema(conn)
+    clear_portion_cache(conn)
+    _console.print("[green]✓[/green]  Portion cache cleared.")
+
+
+# ---------------------------------------------------------------------------
+# Interactive resolution helper  (P9c)
+# ---------------------------------------------------------------------------
+
+def _interactive_pass(conn, results, parsed_for, ctx, lang):
+    """Prompt the user for no-match and 1 g-fallback items; update results in place."""
+    from .lookup import search, get_food, get_nutrients, get_portions
+    from .parser import parse_ingredient, resolve_grams
+    from .recipe import MatchResult, SkipResult
+    from .resolution import save_alias, save_portion_cache
+
+    no_match_idx = [
+        i for i, r in enumerate(results)
+        if isinstance(r, SkipResult) and r.reason == "no food match"
+    ]
+    fallback_idx = [
+        i for i, r in enumerate(results)
+        if isinstance(r, MatchResult) and r.unit_warning and "1 g" in r.unit_warning
+    ]
+
+    if not no_match_idx and not fallback_idx:
+        return
+
+    _console.print()
+    _console.rule("[dim]Interactive resolution[/dim]  [dim italic]Press Enter to skip[/dim italic]", style="bright_black")
+
+    # No-match: ask for a better search term and save as alias
+    for i in no_match_idx:
+        r = results[i]
+        p = parsed_for[i]
+        food_key = p.food_query if p else r.raw.strip()
+        _console.print(f"\n  [red]✗[/red]  No match for [bold]{food_key!r}[/bold]  [dim](from: {r.raw})[/dim]")
+        replacement = click.prompt("  Better search term", default="", show_default=False)
+        if not replacement.strip():
+            continue
+        save_alias(conn, food_key, replacement.strip())
+        ctx.aliases[food_key.lower()] = replacement.strip()
+        # Re-parse and re-search with updated aliases
+        new_p = parse_ingredient(r.raw, aliases=ctx.aliases, taste_defaults=ctx.taste_defaults)
+        if new_p:
+            top = search(conn, new_p.food_query, lang=lang, limit=1)
+            if top:
+                food = get_food(conn, top[0].id)
+                portions = get_portions(conn, top[0].id)
+                grams, warning = resolve_grams(
+                    new_p.amount, new_p.unit, portions,
+                    new_p.food_query, ctx.food_weights, ctx.user_cache,
+                )
+                nutrients = get_nutrients(conn, top[0].id, grams)
+                results[i] = MatchResult(
+                    raw=r.raw, food_id=top[0].id, food_name=food["name_en"],
+                    source_name=food["source_name"], grams=grams,
+                    unit_warning=new_p.note or warning, nutrients=nutrients,
+                )
+
+    # 1 g fallbacks: ask for the gram weight per unit
+    for i in fallback_idx:
+        r = results[i]
+        p = parsed_for[i]
+        unit_label = (p.unit or "each") if p else "each"
+        food_label = (p.food_query if p else r.food_name)
+        _console.print(
+            f"\n  [yellow]⚠[/yellow]  1 g fallback for [bold]{r.raw}[/bold]"
+            f"  [dim](matched: {r.food_name})[/dim]"
+        )
+        gram_input = click.prompt(f"  Grams per {unit_label}", default="", show_default=False)
+        if not gram_input.strip():
+            continue
+        try:
+            grams_per_unit = float(gram_input.strip())
+        except ValueError:
+            _console.print("  [red]Not a number, skipped.[/red]")
+            continue
+        if p:
+            save_portion_cache(conn, p.food_query, p.unit, grams_per_unit)
+            ctx.user_cache[(p.food_query, p.unit)] = grams_per_unit
+        new_grams = (p.amount if p else 1.0) * grams_per_unit
+        new_nutrients = get_nutrients(conn, r.food_id, new_grams)
+        results[i] = MatchResult(
+            raw=r.raw, food_id=r.food_id, food_name=r.food_name,
+            source_name=r.source_name, grams=new_grams,
+            unit_warning=None, nutrients=new_nutrients,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
 
 def _write_output(text: str, output_file: str | None) -> None:
     """Write *text* to *output_file*, or to stdout if output_file is None."""

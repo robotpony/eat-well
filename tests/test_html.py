@@ -130,64 +130,79 @@ def _skip(raw="salt", reason="no quantity found"):
 
 
 def test_recipe_html_is_complete_document():
-    doc = render_recipe_html([_match()], totals=[], servings=None)
+    doc = render_recipe_html([_match()], totals=[])
     assert doc.startswith("<!DOCTYPE html>")
     assert "</html>" in doc
 
 
 def test_recipe_html_has_checkmark_for_match():
-    doc = render_recipe_html([_match()], totals=[], servings=None)
+    doc = render_recipe_html([_match()], totals=[])
     assert "&#10003;" in doc   # ✓
 
 
 def test_recipe_html_has_cross_for_skip():
-    doc = render_recipe_html([_skip()], totals=[], servings=None)
+    doc = render_recipe_html([_skip()], totals=[])
     assert "&#10007;" in doc   # ✗
 
 
 def test_recipe_html_has_triangle_for_warning():
-    doc = render_recipe_html([_match(warning="no portion found")], totals=[], servings=None)
+    doc = render_recipe_html([_match(warning="no portion found")], totals=[])
     assert "&#9651;" in doc    # △
 
 
 def test_recipe_html_has_grams():
-    doc = render_recipe_html([_match(grams=244.0)], totals=[], servings=None)
+    doc = render_recipe_html([_match(grams=244.0)], totals=[])
     assert "244 g" in doc
 
 
 def test_recipe_html_count_label():
-    doc = render_recipe_html([_match(), _skip()], totals=[], servings=None)
+    doc = render_recipe_html([_match(), _skip()], totals=[])
     assert "1 of 2 ingredients matched" in doc
 
 
-def test_recipe_html_servings_column():
+def test_recipe_html_per_portion_column_default():
     totals = [{"name_en": "Energy", "unit": "kcal", "rank": 0, "value": 400.0}]
-    doc = render_recipe_html([_match()], totals=totals, servings=4)
-    assert "÷4" in doc
-    assert "4 servings" in doc
+    doc = render_recipe_html([_match()], totals=totals)
+    assert "Per 150 g" in doc
 
 
-def test_recipe_html_no_servings_column_when_none():
+def test_recipe_html_per_portion_custom_label():
     totals = [{"name_en": "Energy", "unit": "kcal", "rank": 0, "value": 400.0}]
-    doc = render_recipe_html([_match()], totals=totals, servings=None)
-    assert "÷" not in doc
+    doc = render_recipe_html([_match()], totals=totals,
+                             portion_label="Per serving (÷4, 61 g)", portion_factor=0.25)
+    assert "Per serving (÷4, 61 g)" in doc
+
+
+def test_recipe_html_per_portion_value_scaled():
+    # total 400 kcal × factor 0.25 = 100 kcal per portion
+    totals = [{"name_en": "Energy", "unit": "kcal", "rank": 0, "value": 400.0}]
+    doc = render_recipe_html([_match()], totals=totals,
+                             portion_label="Per serving", portion_factor=0.25)
+    assert "100 kcal" in doc
+
+
+def test_recipe_html_total_column_shows_grams():
+    # _match() defaults to grams=244.0; header should include that weight
+    totals = [{"name_en": "Energy", "unit": "kcal", "rank": 0, "value": 100.0}]
+    doc = render_recipe_html([_match(grams=244.0)], totals=totals)
+    assert "Total (244 g)" in doc
 
 
 def test_recipe_html_section_header_in_totals():
     totals = [{"name_en": "Protein", "unit": "g", "rank": 100, "value": 12.5}]
-    doc = render_recipe_html([_match()], totals=totals, servings=None)
+    doc = render_recipe_html([_match()], totals=totals)
     assert "Macros" in doc
 
 
 def test_recipe_html_skip_reason_shown():
-    doc = render_recipe_html([_skip(reason="no food match")], totals=[], servings=None)
+    doc = render_recipe_html([_skip(reason="no food match")], totals=[])
     assert "no food match" in doc
 
 
 def test_recipe_html_escapes_ingredient_text():
     doc = render_recipe_html(
         [_match(raw='1 cup <b>milk</b>', food_name='Milk & cream')],
-        totals=[], servings=None,
+        totals=[],
     )
     assert "<b>" not in doc
     assert "&lt;b&gt;" in doc

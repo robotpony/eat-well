@@ -82,10 +82,13 @@ ew match "100g almonds"
 ```bash
 ew recipe eval ingredients.txt                    # aggregate nutrition across a recipe
 ew recipe eval - < ingredients.txt
-ew recipe eval breakfast.txt --servings 2
+ew recipe eval breakfast.txt --servings 4         # per-serving column (total weight ÷ 4)
+ew recipe eval ingredients.txt --portion 200      # per-portion column at a fixed 200 g
 ew recipe eval ingredients.txt --format md        # output as markdown tables
 ew recipe eval ingredients.txt --format html --output recipe.html   # styled HTML file
 ```
+
+The totals table always shows a "Per portion" column alongside the recipe total. By default it scales to 150 g. `--servings N` divides the total recipe weight by N to compute a realistic per-serving gram weight. `--portion GRAMS` sets the gram weight directly.
 
 Ingredient file format — one per line:
 
@@ -98,10 +101,33 @@ Ingredient file format — one per line:
 
 Each line is parsed for a leading quantity and optional unit, then matched to the best FTS result. Matched lines show grams resolved; unmatched lines are flagged. Supported units include `g`, `kg`, `oz`, `lb`, `cup`, `tbsp`, `tsp`, `ml`, `l`, plus piece units (`large`, `medium`, `small`, `slice`, `clove`, etc.).
 
+The parser also handles:
+- **Amounts buried in parentheses**: `garlic powder (½ teaspoon)` → 0.5 tsp garlic powder
+- **To-taste defaults**: `salt, pepper (to taste)` → resolved using a bundled default (2 g salt) rather than skipped
+- **Food aliases**: `1 tsp msg` → searches for "monosodium glutamate"; add your own with `ew alias add`
+
+```bash
+ew recipe eval ingredients.txt --interactive   # prompt to resolve missing weights; saves answers for next run
+```
+
+## Resolution management
+
+```bash
+ew alias list                              # show bundled + user aliases
+ew alias add MSG "monosodium glutamate"   # add a user alias
+
+ew weights list                            # show food weight reference (shallots, mushrooms, etc.)
+ew weights list mushroom                   # filter by food name
+ew weights add shallot each 30            # add a custom weight
+
+ew portions list                           # show interactively cached gram answers
+ew portions clear                          # clear the cache
+```
+
 ## Development
 
 ```bash
 pytest tests/
 ```
 
-159 tests, all in-memory — no data files required. See `ARCHITECTURE.md` for schema details and `PLAN.md` for the roadmap.
+202 tests, all in-memory — no data files required. See `ARCHITECTURE.md` for schema details and `PLAN.md` for the roadmap.

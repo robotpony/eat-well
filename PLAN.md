@@ -34,11 +34,11 @@ Fallback parser for lines the regex can't handle, improving real-world recipe co
 - Used as fallback when `parse_ingredient()` returns `None`
 - Tests via mock provider
 
-### P9: Enhanced ingredient resolution
+### P9: Enhanced ingredient resolution *(done)*
 
-Four sub-tasks that share a common pattern: bundled defaults + user override layer in `work/`.
+Four sub-tasks sharing a common pattern: bundled defaults + user override layer in `work/`.
 
-#### P9a: Food alias table
+#### P9a: Food alias table *(done)*
 
 Map abbreviations and common synonyms to searchable food names before FTS.
 
@@ -49,7 +49,7 @@ Map abbreviations and common synonyms to searchable food names before FTS.
 - `ew alias list` shows all aliases (bundled + user); `ew alias add MSG "monosodium glutamate"` adds one manually
 - Tests: alias substitution, user alias priority over bundled, no-match prompt path
 
-#### P9b: Food weight reference table
+#### P9b: Food weight reference table *(done)*
 
 Per-food, per-unit gram estimates that extend and supersede the generic `_PIECE_GRAM_ESTIMATES` table in `parser.py`.
 
@@ -61,7 +61,7 @@ Per-food, per-unit gram estimates that extend and supersede the generic `_PIECE_
 - `ew weights list [food]` shows reference entries; `ew weights add "shallot" each 30` adds one manually
 - Tests: exact match, substring match, user override, fallback chain
 
-#### P9c: Interactive resolution
+#### P9c: Interactive resolution *(done)*
 
 Prompt the user during `recipe eval` when gram resolution falls back to 1g, so estimates improve over time.
 
@@ -73,7 +73,7 @@ Prompt the user during `recipe eval` when gram resolution falls back to 1g, so e
 - `ew portions list` shows cached answers; `ew portions clear` removes them
 - Tests: cache write, cache read on next call, silent mode when flag absent
 
-#### P9d: "To taste" defaults
+#### P9d: "To taste" defaults *(done)*
 
 Resolve unquantified seasoning lines (e.g., `salt, pepper (to taste)`) to a reasonable default rather than skipping.
 

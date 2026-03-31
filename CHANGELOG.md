@@ -1,5 +1,93 @@
 # Changelog
 
+## 0.1.21 — 2026-03-30
+
+- Total recipe gram weight now shown in the "Total" column header of `ew recipe eval`
+  - Console: `Total (2,056 g)`; markdown and HTML renderers derive the weight directly from matched ingredient grams
+  - 2 new tests in `test_markdown.py` and `test_html.py` (212 total)
+
+## 0.1.20 — 2026-03-30
+
+- Added per-portion column to `ew recipe eval` (always visible)
+  - Defaults to 150 g when no flag is given: `"Per 150 g"`
+  - `--servings N` computes actual gram weight per serving from total recipe weight ÷ N; label shows e.g. `"Per serving (÷4, 343 g)"`
+  - `--portion GRAMS` sets the gram weight directly: `"Per 250 g"`
+  - `--portion` takes precedence over `--servings` when both are given
+  - Per-portion value = total nutrient × (portion_grams / total_recipe_grams)
+  - Updated `render_recipe_md` and `render_recipe_html` signatures: replaced `servings: Optional[int]` with `portion_label: str` + `portion_factor: float`
+- 6 new/updated tests in `test_markdown.py` and `test_html.py` (210 total)
+
+## 0.1.19 — 2026-03-30
+
+- Fixed USDA Survey (FNDDS) foods having 0 nutrients, causing wildly low recipe energy totals
+  - Root cause: Survey `food_nutrient.csv` stores `nutrient_nbr` (e.g. `208` for Energy) in its `nutrient_id` column, while Foundation and SR Legacy use the USDA `id` column (e.g. `1008`); the importer's lookup map was keyed only by USDA id, so every Survey nutrient lookup silently missed
+  - Fix: `_import_nutrients()` now builds a second map `_nutrient_nbr_map` keyed by `sr_nbr`; `_import_food_nutrients()` tries the USDA-id map first then falls back to the sr_nbr map
+  - Re-running `ew import` adds the 365,560 previously-missing nutrient rows for 5,624 Survey foods; no existing data is duplicated (UNIQUE constraint + INSERT OR IGNORE)
+  - `beef-base.md` now totals ~3,660 kcal instead of 112 kcal
+- 2 new tests in `tests/test_importers.py` (208 total)
+
+## 0.1.18 — 2026-03-29
+
+- Fixed two bugs in `_clean_food_query()` that caused "2 tsp Accent MSG (optional)" to produce no match
+  - **Word-level alias substitution**: step 6 now falls back to matching each word in the cleaned query against the alias table, so `"Accent MSG"` triggers the `"msg"` → `"monosodium glutamate"` alias; exact-match still takes priority when available
+  - **Post-parenthetical "of " strip**: added step 3b that re-strips a leading `"of "` after parenthetical removal; previously `"(3 lbs) of ground beef"` left `"of ground beef"` because step 2 ran before the parenthetical was gone
+- Updated `test_resolution.py`: `test_alias_applied_after_cleaning` renamed and corrected to reflect new word-level behaviour
+- 4 new tests in `tests/test_parser.py` (206 total)
+
+## 0.1.17 — 2026-03-29
+
+- Fixed root cause of "onion" → "Onion dip" mismatch (qol)
+  - `_build_fts_query()` now emits prefix queries (`"onion"*`) for tokens longer
+    than 3 characters, instead of exact-token queries (`"onion"`)
+  - The exact query `"onion"` never matched `"Onions, raw"` because FTS5 tokenises
+    that document as `onions` — a different token — so the correct result was
+    invisible to the re-ranker entirely; the prefix query fixes this
+  - Short tokens (≤ 3 chars) still use exact matching to avoid noisy expansions
+    (e.g. `"of"*` matching `offal`, `official`, etc.)
+  - Added `"onion"` + `"each"` (110 g) to `food_weights.json` so `1 onion`
+    (no unit word) resolves correctly without a DB portion entry
+
+## 0.1.16 — 2026-03-29
+
+- Fixed FTS re-ranking bias against plural food names
+  - `_rerank()` in `lookup.py` now strips one trailing `s` from the first
+    food-name word before comparing to query words, so `"Onions, raw"` is
+    correctly treated as a first-word match for the query `"onion"`
+  - Both `"Onion dip"` and `"Onions, raw"` now land in priority group 0;
+    BM25 order within the group picks the more relevant result
+  - No regression for multi-word queries or non-plural names
+  - Updated and added 2 tests in `tests/test_lookup.py` (202 total)
+
+## 0.1.15 — 2026-03-29
+
+- Implemented P9: Enhanced ingredient resolution (all four sub-tasks)
+- **P9a: Food alias table** — maps abbreviations and synonyms to searchable food names
+  - Bundled aliases in `ew/data/aliases.json`: `msg` → monosodium glutamate, `evoo` → olive oil, `ghee` → clarified butter, and 18 more
+  - User alias table (`user_food_alias`) stored in `work/ew.db`; user entries take priority
+  - Substitution applied as the final step of `_clean_food_query()` (exact match only)
+  - `ew alias list` / `ew alias add KEY REPLACEMENT` management commands
+  - During `recipe eval --interactive`, no-match items prompt for a better search term and save it
+- **P9b: Food weight reference table** — per-food, per-unit gram estimates beyond the generic piece estimates
+  - Bundled reference in `ew/data/food_weights.json`: 41 entries covering shallots, mushrooms, onions, eggs, common vegetables and fruits
+  - User overrides in `work/food_weights.json`; user entries prepended (checked first)
+  - Lookup in `resolve_grams()` between the portion DB and `_PIECE_GRAM_ESTIMATES`; word-prefix matching handles plurals
+  - `ew weights list [food]` / `ew weights add FOOD UNIT GRAMS` management commands
+- **P9c: Interactive resolution** — `ew recipe eval --interactive` (`-i`) flag
+  - After initial pass, collects no-match items and 1 g fallbacks, then prompts once per item
+  - No-match responses saved to `user_food_alias`; gram answers saved to `user_portion_cache` (DB table)
+  - Resolved items re-run the full pipeline and update in-place before rendering
+  - `ew portions list` / `ew portions clear` management commands
+  - Non-interactive runs (no `-i`) are unaffected; piped output stays clean
+- **P9d: To-taste defaults** — resolves unquantified seasoning lines instead of skipping them
+  - Bundled defaults in `ew/data/taste_defaults.json`: salt (2 g), pepper (0.5 g), 20+ herbs and spices
+  - When `parse_ingredient()` finds no quantity but the cleaned food text matches a default key, returns a `ParsedIngredient` with the default amount and a `"to-taste default, assumed Xg"` note
+  - User overrides in `work/taste_defaults.json`
+  - `ParsedIngredient` gains an optional `note` field; displayed in the recipe eval warning column
+- New `ew/resolution.py` module; `ResolutionContext` dataclass bundles all four tables
+- `ew/db.py` gains two new tables: `user_food_alias` and `user_portion_cache`
+- `pyproject.toml` adds `package-data` to ship `ew/data/*.json`
+- 42 new tests in `tests/test_resolution.py` (201 total)
+
 ## 0.1.14 — 2026-03-29
 
 - Fixed quality item 6: parser now handles amount-in-parentheses notation (e.g. `garlic powder (½ teaspoon)`)

@@ -104,6 +104,27 @@ CREATE TABLE IF NOT EXISTS food_portion (
     gram_weight REAL NOT NULL,
     seq_num     INTEGER
 );
+
+-- User-defined food name aliases (P9a).
+-- Merged with bundled aliases from ew/data/aliases.json; user entries win on conflict.
+CREATE TABLE IF NOT EXISTS user_food_alias (
+    id          INTEGER PRIMARY KEY,
+    input_key   TEXT NOT NULL UNIQUE,
+    replacement TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+
+-- User-cached gram resolutions from interactive recipe eval sessions (P9c).
+-- Keyed by (food_query, unit); consulted by resolve_grams() before the 1 g fallback.
+-- unit is NULL for piece-count items with no unit word.
+CREATE TABLE IF NOT EXISTS user_portion_cache (
+    id          INTEGER PRIMARY KEY,
+    food_query  TEXT NOT NULL,
+    unit        TEXT,
+    gram_weight REAL NOT NULL,
+    created_at  TEXT NOT NULL,
+    UNIQUE (food_query, unit)
+);
 """
 
 _CREATE_FTS = """\

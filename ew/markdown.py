@@ -97,15 +97,18 @@ def render_label_md(
 def render_recipe_md(
     results: list,
     totals: list[dict],
-    servings: Optional[int] = None,
+    portion_label: str = "Per 150 g",
+    portion_factor: float = 0.0,
 ) -> str:
     """Return a markdown recipe evaluation string.
 
     *results* is a list of MatchResult / SkipResult objects.
     *totals* is the output of aggregate() — already summed nutrient rows.
+    *portion_label* is the header for the per-portion column (e.g. "Per 150 g").
+    *portion_factor* is portion_grams / total_recipe_grams; multiply total
+    nutrient values by this to get the per-portion value.
     """
     lines: list[str] = []
-    has_servings = servings is not None
 
     # Ingredient table
     lines.append("| | Ingredient | Match | Grams | Note |")
@@ -127,17 +130,13 @@ def render_recipe_md(
     n_matched = len(matched)
     suffix = "s" if n_total != 1 else ""
     count_label = f"{n_matched} of {n_total} ingredient{suffix} matched"
+    total_grams = sum(r.grams for r in matched)
+    total_col_label = f"Total ({total_grams:,.0f} g)"
 
-    if has_servings:
-        lines.append(f"### Totals — {count_label} — {servings} servings")
-        lines.append("")
-        lines.append(f"| Nutrient | Total | Per serving (÷{servings}) |")
-        lines.append("| --- | ---: | ---: |")
-    else:
-        lines.append(f"### Totals — {count_label}")
-        lines.append("")
-        lines.append("| Nutrient | Total |")
-        lines.append("| --- | ---: |")
+    lines.append(f"### Totals — {count_label}")
+    lines.append("")
+    lines.append(f"| Nutrient | {total_col_label} | {portion_label} |")
+    lines.append("| --- | ---: | ---: |")
 
     buckets: dict[str, list] = {name: [] for name, *_ in SECTIONS}
     buckets["Other"] = []
@@ -156,24 +155,18 @@ def render_recipe_md(
         rows = buckets[sname]
         if not rows:
             continue
-        lines.append(f"| **{sname}** | | |" if has_servings else f"| **{sname}** | |")
+        lines.append(f"| **{sname}** | | |")
         for n in rows:
             val = fmt_value(n["value"], n["unit"])
-            if has_servings:
-                per_srv = fmt_value(n["value"] / servings, n["unit"])
-                lines.append(f"| &nbsp;&nbsp;{n['name_en']} | {val} | {per_srv} |")
-            else:
-                lines.append(f"| &nbsp;&nbsp;{n['name_en']} | {val} |")
+            per_portion = fmt_value(n["value"] * portion_factor, n["unit"])
+            lines.append(f"| &nbsp;&nbsp;{n['name_en']} | {val} | {per_portion} |")
 
     if buckets["Other"]:
-        lines.append(f"| **Other** | | |" if has_servings else "| **Other** | |")
+        lines.append("| **Other** | | |")
         for n in buckets["Other"]:
             val = fmt_value(n["value"], n["unit"])
-            if has_servings:
-                per_srv = fmt_value(n["value"] / servings, n["unit"])
-                lines.append(f"| &nbsp;&nbsp;{n['name_en']} | {val} | {per_srv} |")
-            else:
-                lines.append(f"| &nbsp;&nbsp;{n['name_en']} | {val} |")
+            per_portion = fmt_value(n["value"] * portion_factor, n["unit"])
+            lines.append(f"| &nbsp;&nbsp;{n['name_en']} | {val} | {per_portion} |")
 
     lines.append("")
     return "\n".join(lines)
