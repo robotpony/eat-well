@@ -94,17 +94,19 @@ These are populated during import but not queried at runtime:
 - `food_refuse` — inedible portion by weight (CNF: REFUSE AMOUNT). Used to adjust gram weights for whole foods (e.g., banana with peel).
 - `food_yield` — cooking weight change factor (CNF: YIELD AMOUNT). Tracks how raw-to-cooked weight ratios affect nutrient density.
 
-### User resolution tables (P9)
+### User resolution tables (P9 / P8)
 
-These tables live in `work/ew.db` alongside the main data and accumulate over time as the user resolves unknowns.
+These tables live in `work/ew.db` alongside the main food data and accumulate over time as the user resolves unknowns. They are **never dropped by `ew import`** — re-import uses `CREATE TABLE IF NOT EXISTS` and `INSERT OR IGNORE` throughout, so user data is safe across routine re-runs.
 
 ```sql
 -- User-defined food name aliases, e.g. "msg" → "monosodium glutamate".
 -- Merged with bundled aliases from ew/data/aliases.json; user entries win on conflict.
+-- Also populated automatically by the LLM pipeline (P8b) when a food name is extracted.
 CREATE TABLE user_food_alias (
     id          INTEGER PRIMARY KEY,
     input_key   TEXT NOT NULL UNIQUE,   -- normalised lower-case query fragment
     replacement TEXT NOT NULL,          -- substitute search term
+    source      TEXT DEFAULT 'user',    -- 'user' | 'llm' — for filtering in ew alias list
     created_at  TEXT NOT NULL           -- ISO-8601 timestamp
 );
 
@@ -118,7 +120,32 @@ CREATE TABLE user_portion_cache (
     created_at  TEXT NOT NULL,
     UNIQUE (food_query, unit)
 );
+
+-- LLM parse cache (P8b) — full parsed results keyed by normalised raw ingredient text.
+-- Layer 1 cache: avoids re-calling the LLM API for the same text.
+-- Rows older than 30 days are deleted lazily on lookup.
+CREATE TABLE llm_parse_cache (
+    id          INTEGER PRIMARY KEY,
+    raw_text    TEXT NOT NULL UNIQUE,   -- normalised: lower-cased, whitespace-collapsed
+    amount      REAL NOT NULL,
+    unit        TEXT,                   -- NULL for unitless
+    food_query  TEXT NOT NULL,          -- the food name passed to FTS
+    provider    TEXT NOT NULL,          -- 'anthropic' | 'ollama'
+    model       TEXT,                   -- model identifier, e.g. 'claude-haiku-4-5'
+    created_at  TEXT NOT NULL
+);
 ```
+
+#### Persistence across a full DB rebuild
+
+`ew import` never drops user tables, so routine re-imports are safe. If `work/ew.db` is deleted entirely, two JSON files in `work/` restore user state automatically when `ew import` next runs:
+
+| File | Restored table | Written by |
+|---|---|---|
+| `work/llm_cache.json` | `llm_parse_cache` | `ew llm cache export` |
+| `work/user_aliases.json` | `user_food_alias` | `ew alias export` |
+
+Both files are plain JSON, safe to commit to version control, and contain no credentials.
 
 ### FTS index (full-text search)
 
@@ -145,7 +172,18 @@ Static JSON files shipped inside the package under `ew/data/`. Read once at star
 
 User overrides follow the same schema and live in `work/`. They are merged at load time; user entries always win.
 
-## Ingredient Resolution Pipeline (P2 / P9)
+### User-generated serialisation files (P8)
+
+Written by export commands; read automatically by `ew import` if present. These are the recovery path after a full `work/ew.db` delete.
+
+| File | Content | Command |
+|---|---|---|
+| `work/llm_cache.json` | `llm_parse_cache` rows (full LLM parse results) | `ew llm cache export` |
+| `work/user_aliases.json` | `user_food_alias` rows (includes LLM-derived aliases) | `ew alias export` |
+
+Keeping these files in version control is recommended for teams or anyone who re-imports regularly.
+
+## Ingredient Resolution Pipeline (P2 / P8 / P9)
 
 The full resolution pipeline for a single ingredient line, in order:
 
@@ -166,6 +204,15 @@ raw text
   │     └─ alias substitution  ("msg" → "monosodium glutamate")   ← P9a
   │
   ├─ to-taste default lookup  (salt → 2g when no amount found)    ← P9d
+  │
+  ├─ [returns None?] → LLM fallback  (--llm-provider flag)        ← P8
+  │     ├─ check llm_parse_cache  (keyed on normalised raw text)
+  │     │     └─ hit → return cached ParsedIngredient; skip API
+  │     ├─ call LLM provider → extract (amount, unit, food)
+  │     ├─ on success:
+  │     │     ├─ write to llm_parse_cache                         ← P8b Layer 1
+  │     │     └─ write food alias to user_food_alias              ← P8b Layer 2
+  │     └─ on failure → skip line (same as no-LLM behaviour)
   │
   └─ FTS search → _rerank() → best match
         │
@@ -199,6 +246,8 @@ Import order matters due to foreign keys:
 5. `food_nutrient`
 6. `food_portion`
 7. Rebuild FTS index
+8. Auto-import `work/llm_cache.json` → `llm_parse_cache` if the file exists  ← P8c
+9. Auto-import `work/user_aliases.json` → `user_food_alias` if the file exists  ← P8c
 
 ### Nutrient deduplication
 
@@ -216,15 +265,24 @@ gram_weight = ConversionFactorValue * 100
 
 This converts naturally to the `food_portion.gram_weight` format used by USDA.
 
-## CLI Design (P1)
+## CLI Design
 
-The `ew` command is implemented with [Click](https://click.palletsprojects.com/). Database path resolves to `~/.local/share/eat-well/ew.db` by default, overridable via `EW_DB` environment variable.
+The `ew` command is implemented with [Click](https://click.palletsprojects.com/). Database path defaults to `work/ew.db`, overridable via `--db PATH`.
 
 ```
-ew lookup "raw almonds"          # fuzzy search + nutrition label
-ew lookup --lang fr "amandes"    # French search
+ew import                        # (re)run all importers; auto-imports work/llm_cache.json
 ew sources                       # list loaded data sources and row counts
-ew import                        # (re)run all importers
+ew lookup "raw almonds"          # fuzzy search + nutrition label
+ew match "2 cups flour"          # parse + match + scaled label
+ew recipe eval FILE              # aggregate nutrition for a full recipe
+
+# Resolution management
+ew alias list / add / export / import
+ew weights list / add
+ew portions list / clear
+
+# LLM cache management (P8)
+ew llm cache list / export / import / clear
 ```
 
 Nutrition label output follows the standard label order (energy → fat → carbs → protein → fibre → vitamins/minerals), sorted by `nutrient.rank`.

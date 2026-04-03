@@ -26,13 +26,80 @@ Run `ew` as a local HTTP service for programmatic access from other tools.
 
 Fallback parser for lines the regex can't handle, improving real-world recipe coverage.
 
+#### P8a: Provider and extraction
+
 - `ew/llm.py` — `LLMProvider` Protocol with `extract_ingredient(text) -> dict | None`
 - Built-in providers: `AnthropicProvider` (claude-haiku-4-5) and `OllamaProvider` (local, no API key)
-- `--llm-provider anthropic|ollama|none` flag; default `none`
+- `--llm-provider anthropic|ollama|none` flag on `ew recipe eval` and `ew match`; default `none`
 - Structured JSON response (`amount`, `unit`, `food`); validated before use
-- Response cache in `work/llm_cache.sqlite` (7-day TTL) to avoid redundant API calls
 - Used as fallback when `parse_ingredient()` returns `None`
 - Tests via mock provider
+
+#### P8b: Two-layer caching
+
+LLM results are cached at two levels with different lifetimes and purposes.
+
+**Layer 1 — API response cache** (short-term, avoids duplicate API calls):
+
+- Table `llm_parse_cache` in `work/ew.db` (not a separate SQLite file)
+- Schema: `raw_text TEXT UNIQUE, amount REAL, unit TEXT, food_query TEXT, provider TEXT, model TEXT, created_at TEXT`
+- Keyed on normalised raw ingredient text (lowercased, whitespace-collapsed)
+- TTL: 30 days; stale rows deleted lazily on lookup
+- Consulted before calling the LLM provider; hit rate expected to be high for repeated recipes
+
+**Layer 2 — Semantic alias** (permanent, survives DB rebuild):
+
+- On a successful LLM parse, the extracted food name is written to `user_food_alias` (`input_key` = cleaned food fragment, `replacement` = LLM food query)
+- This means subsequent runs resolve via the alias pipeline — no LLM call needed at all
+- `user_food_alias` already survives `ew import` (CREATE TABLE IF NOT EXISTS; data is never dropped)
+- `ew alias list --source llm` filters to show only LLM-derived aliases
+
+#### P8c: Serialization — surviving a full DB rebuild
+
+`work/ew.db` survives routine `ew import` runs (re-import uses INSERT OR IGNORE, never drops tables). A full rebuild — deleting `work/ew.db` — would lose `llm_parse_cache` rows. Two mechanisms prevent that:
+
+**Export/import commands:**
+
+```bash
+ew llm cache export               # writes work/llm_cache.json
+ew llm cache export --output FILE
+ew llm cache import               # reads work/llm_cache.json, upserts into DB
+ew llm cache import --input FILE
+ew llm cache list                 # show cached entries
+ew llm cache clear                # remove all llm_parse_cache rows
+```
+
+**Auto-import on `ew import`:**
+
+- If `work/llm_cache.json` exists, `ew import` loads it into `llm_parse_cache` automatically after rebuilding the schema — no manual step required after a fresh DB build
+- Same pattern as P9 user overrides; consistent mental model
+
+**JSON schema** (`work/llm_cache.json`):
+
+```json
+[
+  {
+    "raw_text": "a handful of cherry tomatoes",
+    "amount": 1.0,
+    "unit": null,
+    "food_query": "cherry tomatoes",
+    "provider": "anthropic",
+    "model": "claude-haiku-4-5",
+    "created_at": "2026-03-31T10:00:00"
+  }
+]
+```
+
+The file can be committed to version control or shared across machines. It does not contain API keys or any sensitive data.
+
+**Alias export** (covers Layer 2):
+
+```bash
+ew alias export               # writes work/user_aliases.json (all user_food_alias rows)
+ew alias import               # reads work/user_aliases.json, upserts into DB
+```
+
+`ew import` also auto-imports `work/user_aliases.json` if present, restoring LLM-derived aliases after a fresh build.
 
 ### P9: Enhanced ingredient resolution *(done)*
 
